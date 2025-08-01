@@ -1,0 +1,105 @@
+# MLOps Serve Configuration
+# Sample configuration file demonstrating all available options
+
+# MLflow configuration
+mlflow:
+  tracking_uri: "http://localhost:5000"
+  registry_uri: null
+  artifact_location: null
+
+# Ray cluster configuration
+ray:
+  address: null  # null for local mode, "ray://head-node:10001" for cluster
+  runtime_env: null
+  dashboard_host: "127.0.0.1"
+  dashboard_port: 8265
+  object_store_memory: null  # bytes, null for auto
+  num_cpus: null  # null for auto-detect
+  num_gpus: null  # null for auto-detect
+  log_level: "INFO"  # Ray logging level (DEBUG, INFO, WARNING, ERROR)
+
+# Default deployment configuration for models
+deployment:
+  resource_config:
+    num_cpus: 1.0  # Reduced to fit more replicas in available resources
+    num_gpus: 0.0  # No GPU required for CPU-only environments
+    memory: 1024  # MB - Reduced to fit more replicas in available memory
+    object_store_memory: 1024  # MB - Increased for better caching
+  
+  autoscaling:
+    min_replicas: 5  # Higher baseline for better responsiveness
+    max_replicas: 100  # Higher ceiling for peak loads
+    target_num_ongoing_requests_per_replica: 5  # Better utilization
+    metrics_interval_s: 5.0  # Faster scaling decisions
+    look_back_period_s: 15.0  # Shorter reaction time
+    upscale_smoothing_factor: 0.8  # Faster upscaling
+    downscale_smoothing_factor: 0.2  # Slower downscaling
+  
+  max_concurrent_queries: 1000
+  health_check_period_s: 10
+  health_check_timeout_s: 30
+
+# Batch processing configuration
+batch_processing:
+  enable_dynamic_batching: true
+  max_batch_size: 256  # Increased for better throughput
+  batch_timeout_ms: 10  # Reduced for lower latency
+  adaptive_batch_sizing: true
+  enable_response_caching: true
+  response_cache_size: 10000
+  response_cache_ttl: 300  # 5 minutes
+
+# Connection pooling configuration
+connection_pooling:
+  enable_connection_pooling: true
+  max_connections: 1000
+  connection_timeout: 30
+  pool_connections: 10
+  pool_maxsize: 20
+
+# Monitoring system configuration
+monitoring:
+  collection_interval: 10  # seconds
+  optimization_interval: 300  # seconds
+  history_size: 1000
+  enable_gpu_monitoring: true
+  health_check_interval: 30
+  alert_thresholds:
+    cpu_percent: 90.0
+    memory_percent: 90.0
+    error_rate: 0.05
+    response_time: 5.0
+
+# Logging configuration
+logging:
+  log_level: "DEBUG"
+  log_dir: "logs"
+  max_file_size: 104857600  # 100MB in bytes
+  backup_count: 5
+  enable_console: true
+  enable_structured: true
+  enable_performance_tracking: true
+
+# Security configuration
+security:
+  enable_auth: false
+  api_key: null  # Set via API_KEY environment variable
+  allowed_origins: ["*"]
+  rate_limit_requests_per_minute: 1000
+  enable_https: false
+  ssl_cert_path: null
+  ssl_key_path: null
+
+# System settings
+model_cache_size: 10
+model_update_interval: 60  # seconds
+max_workers: 32  # Increased from 4 for better concurrent processing
+enable_auto_deployment: true
+deployment_timeout: 300  # seconds
+
+# API settings
+api_host: "0.0.0.0"
+api_port: 8000
+api_prefix: "/api/v1"
+api_version: "v.1.0"
+enable_docs: true
