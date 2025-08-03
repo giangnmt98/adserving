@@ -93,7 +93,7 @@ class ResourceSharingConfig:
 class PooledDeploymentSettings:
     """Settings for pooled deployments"""
 
-    default_pool_count: int = 5  # Number of default pools
+    default_pool_count: int = 2  # Number of default pools
     models_per_pool: int = 50
     enable_cross_pool_balancing: bool = True
     pool_rebalancing_interval: int = 600  # 10 minutes

@@ -332,7 +332,7 @@ def clone_models_interactive():
     # Đọc dữ liệu
     print(" Đang đọc dữ liệu...")
     try:
-        data = pd.read_csv('/home/giang/a/data/bao_cao_dulieu_not_none.csv')
+        data = pd.read_csv('./data/bao_cao_dulieu_not_none.csv')
         data['ky_du_lieu'] = pd.to_datetime(data['ky_du_lieu'])
         print(f" Đã đọc {len(data)} dòng dữ liệu")
     except FileNotFoundError:
@@ -466,8 +466,8 @@ def clone_multiple_combinations(data, combinations_df):
             elapsed = time.time() - start_time
             avg_time = elapsed / i
             remaining = (len(combinations_df) - i) * avg_time
-            print(f"\n   ⏱ Tiến độ: {i}/{len(combinations_df)} combinations ({i / len(combinations_df) * 100:.1f}%)")
-            print(f"   ⏰ Thời gian còn lại ước tính: {remaining / 60:.1f} phút")
+            print(f"\nTiến độ: {i}/{len(combinations_df)} combinations ({i / len(combinations_df) * 100:.1f}%)")
+            print(f"Thời gian còn lại ước tính: {remaining / 60:.1f} phút")
 
     # Tổng kết
     total_time = time.time() - start_time
@@ -533,7 +533,7 @@ def train_and_save_all_models():
     # Đọc dữ liệu
     print(" Đang đọc dữ liệu...")
     try:
-        data = pd.read_csv('/home/giang/a/data/bao_cao_dulieu_not_none.csv')
+        data = pd.read_csv('./data/bao_cao_dulieu_not_none.csv')
         data['ky_du_lieu'] = pd.to_datetime(data['ky_du_lieu'])
         print(f" Đã đọc {len(data)} dòng dữ liệu")
         print(f" Khoảng thời gian: {data['ky_du_lieu'].min()} đến {data['ky_du_lieu'].max()}")

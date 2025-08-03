@@ -20,22 +20,32 @@ from ray import serve
 from ray.serve.config import AutoscalingConfig
 
 from ..core.model_manager import ModelManager
+from ..core.tier_manager import TierManager
+from ..config.base_types import ModelTier
 from .pooled_actor import PooledModelActor
 from .resource_config import (
     AutoscalingSettings,
     PooledDeploymentConfig,
     PooledResourceConfig,
+    TierBasedDeploymentConfig,
+    TierResourceConfig,
 )
 
 
 class PooledModelDeployment:
     """Manages pooled model deployments for hundreds of models"""
 
-    def __init__(self, model_manager: ModelManager, config: Optional[Any] = None):
+    def __init__(self, model_manager: ModelManager, config: Optional[Any] = None, tier_manager: Optional[TierManager] = None):
         self.model_manager = model_manager
         self.config = config  # Store the main config object
+        self.tier_manager = tier_manager
         self.deployments: Dict[str, Any] = {}
         self.deployment_configs: Dict[str, PooledDeploymentConfig] = {}
+        self.tier_deployments: Dict[str, Dict[str, Any]] = {
+            ModelTier.HOT: {},
+            ModelTier.WARM: {},
+            ModelTier.COLD: {}
+        }
         self.logger = logging.getLogger(__name__)
 
     def _get_available_gpus(self) -> float:
@@ -97,6 +107,110 @@ class PooledModelDeployment:
             self.logger.error(
                 f"Error creating pooled deployment {config.deployment_name}: {e}"
             )
+            return False
+
+    def create_tier_based_pools(self, tier_config: TierBasedDeploymentConfig) -> Dict[str, List[str]]:
+        """Create tier-based deployment pools with tier-specific resource allocation"""
+        created_pools = {
+            ModelTier.HOT: [],
+            ModelTier.WARM: [],
+            ModelTier.COLD: []
+        }
+        
+        if not self.tier_manager:
+            self.logger.warning("Tier manager not available, falling back to default pools")
+            return created_pools
+        
+        try:
+            for tier, tier_resource_config in tier_config.tier_configs.items():
+                # Create multiple pools per tier for load distribution
+                pools_per_tier = self._calculate_pools_per_tier(tier, tier_resource_config)
+                
+                for pool_idx in range(pools_per_tier):
+                    deployment_name = f"pooled-{tier.lower()}-{pool_idx}"
+                    
+                    # Create pooled deployment config with tier-specific resources
+                    pooled_config = PooledDeploymentConfig(
+                        deployment_name=deployment_name,
+                        resource_config=PooledResourceConfig(
+                            num_cpus=tier_resource_config.num_cpus,
+                            num_gpus=tier_resource_config.num_gpus,
+                            memory=tier_resource_config.memory,
+                            object_store_memory=tier_resource_config.object_store_memory,
+                            max_models_per_replica=tier_resource_config.max_models_per_replica
+                        ),
+                        autoscaling=AutoscalingSettings(
+                            min_replicas=tier_resource_config.min_replicas,
+                            max_replicas=tier_resource_config.max_replicas,
+                            target_num_ongoing_requests_per_replica=tier_resource_config.target_requests_per_replica,
+                            metrics_interval_s=5.0,
+                            look_back_period_s=30.0,
+                            smoothing_factor=0.8
+                        ),
+                        max_concurrent_queries=tier_resource_config.target_requests_per_replica * tier_resource_config.max_replicas,
+                        model_pool_size=tier_resource_config.max_models_per_replica * 2
+                    )
+                    
+                    # Create the deployment
+                    if self.create_pooled_deployment(pooled_config):
+                        created_pools[tier].append(deployment_name)
+                        self.tier_deployments[tier][deployment_name] = self.deployments[deployment_name]
+                        self.logger.info(f"Created {tier} tier pool: {deployment_name} with "
+                                       f"{tier_resource_config.num_cpus} CPUs, "
+                                       f"{tier_resource_config.num_gpus} GPUs, "
+                                       f"{tier_resource_config.memory}MB memory")
+                    else:
+                        self.logger.error(f"Failed to create {tier} tier pool: {deployment_name}")
+            
+            self.logger.info(f"Created tier-based pools: {dict(created_pools)}")
+            return created_pools
+            
+        except Exception as e:
+            self.logger.error(f"Error creating tier-based pools: {e}")
+            return created_pools
+    
+    def _calculate_pools_per_tier(self, tier: str, tier_config: TierResourceConfig) -> int:
+        """Calculate number of pools needed per tier based on expected load"""
+        if tier == ModelTier.HOT:
+            return 3  # More pools for high-priority models
+        elif tier == ModelTier.WARM:
+            return 2  # Medium number of pools
+        else:  # COLD
+            return 1  # Minimal pools for cold models
+    
+    def get_tier_deployment(self, tier: str, model_name: str = None) -> Optional[str]:
+        """Get appropriate deployment for a tier, with optional model-specific routing"""
+        if tier not in self.tier_deployments or not self.tier_deployments[tier]:
+            return None
+        
+        # Simple round-robin selection for now
+        # TODO: Implement intelligent load balancing
+        deployments = list(self.tier_deployments[tier].keys())
+        if not deployments:
+            return None
+        
+        # For now, return the first available deployment
+        # In production, this should consider load balancing
+        return deployments[0]
+    
+    def migrate_model_to_tier(self, model_name: str, old_tier: str, new_tier: str) -> bool:
+        """Migrate a model from one tier to another"""
+        try:
+            # This is a placeholder for model migration logic
+            # In a full implementation, this would:
+            # 1. Remove model from old tier deployment
+            # 2. Add model to new tier deployment
+            # 3. Update routing tables
+            
+            self.logger.info(f"Migrating model {model_name} from {old_tier} to {new_tier}")
+            
+            # For now, just log the migration
+            # TODO: Implement actual model migration between deployments
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error migrating model {model_name}: {e}")
             return False
 
     def create_default_pools(self, num_pools: Optional[int] = None) -> List[str]:

@@ -1,105 +1,170 @@
-# MLOps Serve Configuration
-# Sample configuration file demonstrating all available options
+# 1. API Settings
+api_host: "0.0.0.0"              # Bind tất cả interfaces (0.0.0.0 = all)
+api_port: 8000                   # Port chính của FastAPI service
+api_prefix: "/api/v1"            # URL prefix cho tất cả endpoints
+api_version: "v1.0"             # Version hiển thị trong docs
+enable_docs: true                # Bật Swagger/OpenAPI docs
 
-# MLflow configuration
-mlflow:
-  tracking_uri: "http://localhost:5000"
-  registry_uri: null
-  artifact_location: null
-
-# Ray cluster configuration
+# 2. Ray Cluster - Hạ tầng tính toán phân tán cho hundreds models
 ray:
-  address: null  # null for local mode, "ray://head-node:10001" for cluster
-  runtime_env: null
-  dashboard_host: "127.0.0.1"
-  dashboard_port: 8265
-  object_store_memory: null  # bytes, null for auto
-  num_cpus: null  # null for auto-detect
-  num_gpus: null  # null for auto-detect
-  log_level: "INFO"  # Ray logging level (DEBUG, INFO, WARNING, ERROR)
+  address: null                  # null = local cluster, "ray://host:port" = remote
+  dashboard_host: "127.0.0.1"    # Ray dashboard web UI host
+  dashboard_port: 8265           # Ray dashboard port (http://localhost:8265)
+  object_store_memory: null      # Shared memory cho model weights/data
+  num_cpus: null                 # null = auto-detect CPU cores
+  num_gpus: null                 # null = auto-detect GPU cards
+  runtime_env: null              # Python dependencies, env vars for Ray workers
+  log_level: "INFO"              # Ray internal logging (DEBUG/INFO/WARNING/ERROR)
 
-# Default deployment configuration for models
+# 3. MLflow - Model registry và tracking
+mlflow:
+  tracking_uri: "http://localhost:5000"     # MLflow tracking server
+  registry_uri: null                        # Model registry (có thể khác tracking)
+  artifact_location: null                   # Local path lưu artifacts
+
+# PERFORMANCE & SCALING CONFIGURATIONS
+# 4. Pooled Deployment - Quản lý pools cho hundreds models
+pooled_deployment:
+  default_pool_count: 4          # Số pools khởi tạo (2-5 pools thường đủ)
+  models_per_pool: 50            # Số models tối đa mỗi pool (50-100)
+  enable_cross_pool_balancing: true  # Cân bằng tải giữa pools
+  pool_rebalancing_interval: 600     # Interval rebalance (10 phút)
+  
+  # Resource allocation cho mỗi pool
+  pool_resource_config:
+    num_cpus: 3.0                # CPU cores per pool replica
+    num_gpus: 0.0                # GPU cards per pool replica
+    memory: 3384                # RAM MB per replica (16GB)
+    object_store_memory: 8192    # Object store MB per replica (8GB)
+    max_models_per_replica: 20   # Models max per replica instance
+  
+  # Auto-scaling cho pool replicas
+  autoscaling_config:
+    min_replicas: 1              # Minimum replicas always running
+    max_replicas: 50             # Maximum replicas (scale for load)
+    target_num_ongoing_requests_per_replica: 15 # Target concurrent requests
+    metrics_interval_s: 5.0      # Metrics collection interval
+    look_back_period_s: 30.0     # Historical data window for scaling
+    smoothing_factor: 0.8        # Scaling sensitivity (0.1-1.0)
+
+# 5. Tiered Loading - Chiến lược cache thông minh cho models
+tiered_loading:
+  enable_tiered_loading: true    # Bật tiered caching system
+  hot_cache_size: 50            # "Hot" models - luôn in memory (most used)
+  warm_cache_size: 100          # "Warm" models - load on demand (frequently used)
+  cold_cache_size: 500          # "Cold" models - lazy load (rarely used)
+  
+  # Promotion thresholds - nâng cấp models lên tier cao hơn
+  hot_promotion_threshold: 20    # Requests để promote lên Hot tier
+  warm_promotion_threshold: 5    # Requests để promote lên Warm tier
+  hot_promotion_time_window: 300 # Time window cho Hot promotion (5 phút)
+  warm_promotion_time_window: 3600 # Time window cho Warm promotion (1 giờ)
+  
+  # Model warming - preload popular models
+  enable_model_warming: true     # Bật background model warming
+  warm_popular_models_count: 100  # Số models warm trước
+  warming_interval: 300          # Interval check popular models (5 phút)
+  
+  # Cleanup policy
+  cleanup_interval: 3600         # Interval cleanup unused models (1 giờ)
+  cold_model_ttl: 7200          # TTL cho cold models (2 giờ)
+
+# 6. Resource Sharing - Tối ưu resource utilization
+resource_sharing:
+  strategy: "gpu_shared"         # Strategies: none/cpu_only/gpu_shared/memory_mapped/full_sharing
+  enable_memory_mapping: true    # Share model weights in memory
+  enable_model_weight_sharing: true # Multiple models share same weights
+  shared_memory_size: "10GB"     # Shared memory pool size
+  
+  # GPU optimization
+  max_models_per_gpu: 5          # Max models per GPU card
+  gpu_memory_reserve: 0.2        # Reserve 20% GPU memory cho system
+  enable_dynamic_gpu_allocation: true # Dynamic GPU allocation
+  
+  # CPU optimization  
+  cpu_oversubscription_factor: 2.0 # Allow 2x CPU oversubscription
+  enable_cpu_affinity: true       # Pin processes to CPU cores
+  
+  # Memory optimization
+  enable_model_compression: true   # Compress models in memory
+  compression_ratio: 0.7          # Target 70% original size
+  enable_lazy_loading: true       # Load model parts on demand
+
+
+# DEPLOYMENT & SYSTEM SETTINGS
+# 7. Default Deployment - Legacy deployment settings
 deployment:
   resource_config:
-    num_cpus: 1.0  # Reduced to fit more replicas in available resources
-    num_gpus: 0.0  # No GPU required for CPU-only environments
-    memory: 1024  # MB - Reduced to fit more replicas in available memory
-    object_store_memory: 1024  # MB - Increased for better caching
+    num_cpus: 0.5               # CPU cores per model replica
+    num_gpus: 0.0                # GPU cards per model replica
+    memory: 1024                 # RAM MB per replica
+    object_store_memory: 1024    # Object store MB per replica
   
   autoscaling:
-    min_replicas: 5  # Higher baseline for better responsiveness
-    max_replicas: 100  # Higher ceiling for peak loads
-    target_num_ongoing_requests_per_replica: 5  # Better utilization
-    metrics_interval_s: 5.0  # Faster scaling decisions
-    look_back_period_s: 15.0  # Shorter reaction time
-    upscale_smoothing_factor: 0.8  # Faster upscaling
-    downscale_smoothing_factor: 0.2  # Slower downscaling
+    min_replicas: 1              # Minimum replicas always running
+    max_replicas: 20            # Maximum replicas for scaling
+    target_num_ongoing_requests_per_replica: 5 # Target concurrent requests
+    metrics_interval_s: 5.0      # Metrics collection interval
+    look_back_period_s: 15.0     # Historical data window
+    upscale_smoothing_factor: 0.8    # Scaling up sensitivity
+    downscale_smoothing_factor: 0.2  # Scaling down sensitivity
   
-  max_concurrent_queries: 1000
-  health_check_period_s: 10
-  health_check_timeout_s: 30
+  max_concurrent_queries: 1000   # Max concurrent queries per deployment
+  health_check_period_s: 10      # Health check interval
+  health_check_timeout_s: 30     # Health check timeout
 
-# Batch processing configuration
+# 8. System Settings - Core system parameters
+max_workers: 12                 # Thread pool workers cho background tasks
+enable_auto_deployment: true    # Auto deploy models from MLflow
+deployment_timeout: 300         # Deployment timeout (5 phút)
+
+# REQUEST HANDLING & PROCESSING
+# 9. Batch Processing - Tối ưu throughput
 batch_processing:
-  enable_dynamic_batching: true
-  max_batch_size: 256  # Increased for better throughput
-  batch_timeout_ms: 10  # Reduced for lower latency
-  adaptive_batch_sizing: true
-  enable_response_caching: true
-  response_cache_size: 10000
-  response_cache_ttl: 300  # 5 minutes
+  enable_dynamic_batching: true  # Batch multiple requests together
+  max_batch_size: 256           # Max requests per batch
+  batch_timeout_ms: 20          # Max wait time for batch (ms)
+  adaptive_batch_sizing: true   # Adjust batch size dynamically
+  enable_response_caching: true # Cache response results
+  response_cache_size: 10000    # Max cached responses
+  response_cache_ttl: 300       # Cache TTL seconds (5 phút)
 
-# Connection pooling configuration
+# 10. Connection Pooling - Database/HTTP connection optimization
 connection_pooling:
-  enable_connection_pooling: true
-  max_connections: 1000
-  connection_timeout: 30
-  pool_connections: 10
-  pool_maxsize: 20
+  enable_connection_pooling: true # Pool connections to external services
+  max_connections: 1000          # Max total connections
+  connection_timeout: 30         # Connection timeout seconds
+  pool_connections: 10           # Connections per pool
+  pool_maxsize: 20              # Max pool size
 
-# Monitoring system configuration
+# 11. Performance Tuning - General performance settings
+performance:
+  enable_performance_optimization: true # Enable performance optimizations
+  enable_response_caching: true       # Cache HTTP responses
+
+
+# MONITORING & OBSERVABILITY
+# 12. Monitoring - System health và metrics
 monitoring:
-  collection_interval: 10  # seconds
-  optimization_interval: 300  # seconds
-  history_size: 1000
-  enable_gpu_monitoring: true
-  health_check_interval: 30
+  collection_interval: 10       # Metrics collection interval (seconds)
+  optimization_interval: 300    # Auto optimization interval (5 phút)
+  history_size: 1000           # Historical metrics buffer size
+  enable_gpu_monitoring: true   # Monitor GPU usage
+  health_check_interval: 30     # Health check interval
+  
+  # Alert thresholds
   alert_thresholds:
-    cpu_percent: 90.0
-    memory_percent: 90.0
-    error_rate: 0.05
-    response_time: 5.0
+    cpu_percent: 90.0           # Alert khi CPU > 90%
+    memory_percent: 90.0        # Alert khi Memory > 90%
+    error_rate: 0.05           # Alert khi Error rate > 5%
+    response_time: 5.0         # Alert khi Response time > 5s
 
-# Logging configuration
+# 13. Logging - Application logging
 logging:
-  log_level: "DEBUG"
-  log_dir: "logs"
-  max_file_size: 104857600  # 100MB in bytes
-  backup_count: 5
-  enable_console: true
-  enable_structured: true
-  enable_performance_tracking: true
-
-# Security configuration
-security:
-  enable_auth: false
-  api_key: null  # Set via API_KEY environment variable
-  allowed_origins: ["*"]
-  rate_limit_requests_per_minute: 1000
-  enable_https: false
-  ssl_cert_path: null
-  ssl_key_path: null
-
-# System settings
-model_cache_size: 10
-model_update_interval: 60  # seconds
-max_workers: 32  # Increased from 4 for better concurrent processing
-enable_auto_deployment: true
-deployment_timeout: 300  # seconds
-
-# API settings
-api_host: "0.0.0.0"
-api_port: 8000
-api_prefix: "/api/v1"
-api_version: "v.1.0"
-enable_docs: true
+  log_level: "DEBUG"            # Log levels: DEBUG/INFO/WARNING/ERROR
+  log_dir: "logs"               # Log directory
+  max_file_size: 104857600      # Max file size (100MB in bytes)
+  backup_count: 5               # Number of backup files
+  enable_console: true          # Log to console
+  enable_structured: true       # Structured logging
+  enable_performance_tracking: true # Track performance metrics
