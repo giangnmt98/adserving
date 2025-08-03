@@ -330,7 +330,7 @@ class ModelRouter:
                 self.deployment_loads[deployment_name] += 1
 
             # Get deployment handle and send request
-            handle = serve.get_app_handle(deployment_name)
+            handle = serve.get_app_handle(deployment_name).get_handle()
             result = await handle.remote(request)
 
             return result

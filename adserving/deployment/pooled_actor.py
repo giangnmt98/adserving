@@ -182,6 +182,40 @@ class PooledModelActor:
                 "deployment_name": self.deployment_name,
             }
 
+    async def preload_model(self, model_name: str) -> Dict[str, Any]:
+        """Pre-load a specific model into this deployment pool"""
+        try:
+            self.logger.info(
+                f"Pre-loading model {model_name} into deployment {self.deployment_name}"
+            )
+
+            # Load the model through the model manager
+            model_info = await self.model_manager.load_model_async(model_name)
+
+            if model_info:
+                self.logger.info(
+                    f"Successfully pre-loaded model "
+                    f"{model_name} into deployment {self.deployment_name}"
+                )
+                return {
+                    "status": "success",
+                    "message": f"Model {model_name}" f" pre-loaded successfully",
+                    "model_info": model_info,
+                }
+            else:
+                self.logger.error(f"Failed to pre-load model {model_name}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to pre-load model {model_name}",
+                }
+
+        except Exception as e:
+            self.logger.error(f"Error pre-loading model {model_name}: {e}")
+            return {
+                "status": "error",
+                "message": f"Error pre-loading model" f" {model_name}: {str(e)}",
+            }
+
     def get_metrics(self) -> Dict[str, Any]:
         """Get detailed metrics"""
         metrics_snapshot = self.metrics_collector.get_metrics_snapshot()

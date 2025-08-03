@@ -2,9 +2,12 @@
 Model deployment handler
 Handles production model deployment with parallel loading
 """
+
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
+import ray
+from ray import serve
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +15,9 @@ logger = logging.getLogger(__name__)
 class ModelDeploymentHandler:
     """Handles model deployment operations"""
 
-    def deploy_models(self, model_manager, deployment_manager,
-                      model_router) -> Dict[str, int]:
+    def deploy_models(
+        self, model_manager, deployment_manager, model_router
+    ) -> Dict[str, int]:
         """Deploy production models with parallel loading."""
         try:
             logger.info("Deploying production models from MLflow...")
@@ -23,7 +27,7 @@ class ModelDeploymentHandler:
 
             if not production_models:
                 logger.warning("No production models found")
-                return {'loaded': 0, 'failed': 0}
+                return {"loaded": 0, "failed": 0}
 
             # Create deployment pools
             self._create_deployment_pools(deployment_manager, model_router)
@@ -37,17 +41,17 @@ class ModelDeploymentHandler:
             if loaded_count > 0:
                 self._warm_up_deployment_pools()
 
-            logger.info(f"Models deployed: {loaded_count} loaded, "
-                        f"{failed_count} failed")
+            logger.info(
+                f"Models deployed: {loaded_count} loaded, " f"{failed_count} failed"
+            )
 
-            return {'loaded': loaded_count, 'failed': failed_count}
+            return {"loaded": loaded_count, "failed": failed_count}
 
         except Exception as e:
             logger.error(f"Failed to deploy production models: {e}")
-            return {'loaded': 0, 'failed': 0}
+            return {"loaded": 0, "failed": 0}
 
-    def _create_deployment_pools(self, deployment_manager,
-                                 model_router) -> None:
+    def _create_deployment_pools(self, deployment_manager, model_router) -> None:
         """Create default deployment pools."""
         existing_deployments = deployment_manager.get_all_deployment_stats()
         if existing_deployments:
@@ -60,8 +64,9 @@ class ModelDeploymentHandler:
         for pool_name in created_pools:
             model_router.register_deployment(pool_name)
 
-    def _load_models_parallel(self, production_models: List[str],
-                              model_manager) -> tuple[int, int]:
+    def _load_models_parallel(
+        self, production_models: List[str], model_manager
+    ) -> tuple[int, int]:
         """Load models in parallel."""
         loaded_count = 0
         failed_count = 0
@@ -70,8 +75,8 @@ class ModelDeploymentHandler:
 
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
             future_to_model = {
-                executor.submit(self._load_single_model, model, model_manager):
-                    model for model in production_models
+                executor.submit(self._load_single_model, model, model_manager): model
+                for model in production_models
             }
 
             for future in as_completed(future_to_model):
@@ -101,9 +106,6 @@ class ModelDeploymentHandler:
     def _warm_up_deployment_pools(self) -> None:
         """Warm up deployment pools to prevent cold starts."""
         try:
-            import ray
-            from ray import serve
-
             deployments = serve.list_deployments()
             if not deployments:
                 return
@@ -127,16 +129,13 @@ class ModelDeploymentHandler:
 
     def _perform_warmup_requests(self, deployment_name: str) -> None:
         """Perform warmup requests to a deployment."""
-        import ray
-        from ray import serve
-
-        deployment_handle = serve.get_deployment(deployment_name).get_handle()
+        deployment_handle = serve.get_app_handle(deployment_name)
 
         warmup_payload = {
             "ma_don_vi": "UBND.0019",
             "ma_bao_cao": "10628953_CT",
             "ky_du_lieu": "2024-01-01",
-            "data": [{"ma_tieu_chi": "TONGCONG", "FN01": 1000000}]
+            "data": [{"ma_tieu_chi": "TONGCONG", "FN01": 1000000}],
         }
 
         # Make multiple warmup requests

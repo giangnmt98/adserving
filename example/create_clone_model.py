@@ -94,7 +94,7 @@ class SimpleAnomalyDetectionModel:
 
 if __name__ == "__main__":
     N = 5  # số bản sao cho mỗi model gốc
-    data_path = "../data/bao_cao_dulieu_not_none.csv"
+    data_path = "./data/bao_cao_dulieu_not_none.csv"
     data = pd.read_csv(data_path)
     data['ky_du_lieu'] = pd.to_datetime(data['ky_du_lieu'])
     model_list = []
@@ -125,7 +125,7 @@ if __name__ == "__main__":
             })
 
     # Export danh sách model clone
-    output_path = "../generated_model_names.json"
+    output_path = "generated_model_names.json"
     with open(output_path, "w") as f:
         json.dump(model_list, f, indent=2, ensure_ascii=False)
 

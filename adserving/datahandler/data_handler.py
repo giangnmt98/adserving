@@ -39,13 +39,27 @@ class DataHandler:
         self, request: PredictionRequest
     ) -> Dict[str, Any]:
         """Process the specified data format request"""
+        # Extract validation errors from request data
+        validation_errors = []
+        for item in request.data:
+            if isinstance(item, dict) and '_validation_errors' in item:
+                validation_errors.extend(item['_validation_errors'])
+                # Remove validation errors from the data before processing
+                del item['_validation_errors']
+        
         # Return the request data in the format expected by pooled deployment
-        return {
+        result = {
             "ma_don_vi": request.ma_don_vi,
             "ma_bao_cao": request.ma_bao_cao,
             "ky_du_lieu": request.ky_du_lieu,
             "data": request.data,
         }
+        
+        # Add validation errors if any exist
+        if validation_errors:
+            result["_validation_errors"] = validation_errors
+            
+        return result
 
     # def _normalize_field_code(self, field_name: str) -> str:
     #     """Normalize field code similar to test_simple_api"""
@@ -154,12 +168,25 @@ class DataHandler:
     ) -> APIResponse:
         """Optimized response formatting processing only essential fields"""
 
+        # Check for validation errors first
+        validation_errors = result.get("_validation_errors", [])
+        
         # Fast path: early validation with minimal processing
         if result.get("status") != "success" or "results" not in result:
+            # If we have validation errors, create a response with them
+            if validation_errors:
+                return self._create_validation_error_response(
+                    validation_errors, result, request_id, total_time
+                )
             return self._create_error_response(request_id, total_time)
 
         results_list = result["results"]
         if not results_list:
+            # If we have validation errors, create a response with them
+            if validation_errors:
+                return self._create_validation_error_response(
+                    validation_errors, result, request_id, total_time
+                )
             return self._create_empty_response(request_id, total_time)
 
         try:
@@ -171,12 +198,25 @@ class DataHandler:
                 results_list, request_info
             )
 
+            # Add validation errors to prediction errors
+            if validation_errors:
+                for val_error in validation_errors:
+                    prediction_errors.append(
+                        PredictionError(
+                            ma_tieu_chi=val_error["ma_tieu_chi"],
+                            fld_code=val_error["fld_code"],
+                            error_message=val_error["error_message"]
+                        )
+                    )
+                # Set status to error if we have validation errors
+                metadata.status = "error"
+
             results = [
                 CriterionResult(ma_tieu_chi=ma_tieu_chi, anomaly_FN=anomaly_fns)
                 for ma_tieu_chi, anomaly_fns in criteria_groups.items()
             ]
 
-            if not results:
+            if not results and not validation_errors:
                 metadata.status = "error"
 
             return APIResponse(
@@ -317,4 +357,42 @@ class DataHandler:
             request_info=RequestInfo(ma_don_vi="", ma_bao_cao="", ky_du_lieu=""),
             results=[],
             notes=None,
+        )
+
+    def _create_validation_error_response(
+        self, validation_errors: List[Dict[str, Any]], result: Dict[str, Any], 
+        request_id: str, total_time: float
+    ) -> APIResponse:
+        """Create response with validation errors"""
+        # Extract request info from result
+        ma_don_vi = result.get("ma_don_vi", "")
+        ma_bao_cao = result.get("ma_bao_cao", "")
+        ky_du_lieu = result.get("ky_du_lieu", "")
+        
+        # Convert validation errors to PredictionError objects
+        prediction_errors = []
+        for val_error in validation_errors:
+            prediction_errors.append(
+                PredictionError(
+                    ma_tieu_chi=val_error["ma_tieu_chi"],
+                    fld_code=val_error["fld_code"],
+                    error_message=val_error["error_message"]
+                )
+            )
+        
+        return APIResponse(
+            metadata=Metadata(
+                status="error",
+                timestamp=datetime.now().isoformat(),
+                request_id=request_id,
+                api_version=self.config.api_version,
+                total_time=total_time,
+            ),
+            request_info=RequestInfo(
+                ma_don_vi=ma_don_vi, 
+                ma_bao_cao=ma_bao_cao, 
+                ky_du_lieu=ky_du_lieu
+            ),
+            results=[],
+            notes=prediction_errors,
         )

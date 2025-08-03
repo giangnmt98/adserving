@@ -35,7 +35,12 @@ from .resource_config import (
 class PooledModelDeployment:
     """Manages pooled model deployments for hundreds of models"""
 
-    def __init__(self, model_manager: ModelManager, config: Optional[Any] = None, tier_manager: Optional[TierManager] = None):
+    def __init__(
+        self,
+        model_manager: ModelManager,
+        config: Optional[Any] = None,
+        tier_manager: Optional[TierManager] = None,
+    ):
         self.model_manager = model_manager
         self.config = config  # Store the main config object
         self.tier_manager = tier_manager
@@ -44,7 +49,7 @@ class PooledModelDeployment:
         self.tier_deployments: Dict[str, Dict[str, Any]] = {
             ModelTier.HOT: {},
             ModelTier.WARM: {},
-            ModelTier.COLD: {}
+            ModelTier.COLD: {},
         }
         self.logger = logging.getLogger(__name__)
 
@@ -109,26 +114,28 @@ class PooledModelDeployment:
             )
             return False
 
-    def create_tier_based_pools(self, tier_config: TierBasedDeploymentConfig) -> Dict[str, List[str]]:
+    def create_tier_based_pools(
+        self, tier_config: TierBasedDeploymentConfig
+    ) -> Dict[str, List[str]]:
         """Create tier-based deployment pools with tier-specific resource allocation"""
-        created_pools = {
-            ModelTier.HOT: [],
-            ModelTier.WARM: [],
-            ModelTier.COLD: []
-        }
-        
+        created_pools = {ModelTier.HOT: [], ModelTier.WARM: [], ModelTier.COLD: []}
+
         if not self.tier_manager:
-            self.logger.warning("Tier manager not available, falling back to default pools")
+            self.logger.warning(
+                "Tier manager not available, falling back to default pools"
+            )
             return created_pools
-        
+
         try:
             for tier, tier_resource_config in tier_config.tier_configs.items():
                 # Create multiple pools per tier for load distribution
-                pools_per_tier = self._calculate_pools_per_tier(tier, tier_resource_config)
-                
+                pools_per_tier = self._calculate_pools_per_tier(
+                    tier, tier_resource_config
+                )
+
                 for pool_idx in range(pools_per_tier):
                     deployment_name = f"pooled-{tier.lower()}-{pool_idx}"
-                    
+
                     # Create pooled deployment config with tier-specific resources
                     pooled_config = PooledDeploymentConfig(
                         deployment_name=deployment_name,
@@ -137,7 +144,7 @@ class PooledModelDeployment:
                             num_gpus=tier_resource_config.num_gpus,
                             memory=tier_resource_config.memory,
                             object_store_memory=tier_resource_config.object_store_memory,
-                            max_models_per_replica=tier_resource_config.max_models_per_replica
+                            max_models_per_replica=tier_resource_config.max_models_per_replica,
                         ),
                         autoscaling=AutoscalingSettings(
                             min_replicas=tier_resource_config.min_replicas,
@@ -145,31 +152,40 @@ class PooledModelDeployment:
                             target_num_ongoing_requests_per_replica=tier_resource_config.target_requests_per_replica,
                             metrics_interval_s=5.0,
                             look_back_period_s=30.0,
-                            smoothing_factor=0.8
+                            smoothing_factor=0.8,
                         ),
-                        max_concurrent_queries=tier_resource_config.target_requests_per_replica * tier_resource_config.max_replicas,
-                        model_pool_size=tier_resource_config.max_models_per_replica * 2
+                        max_concurrent_queries=tier_resource_config.target_requests_per_replica
+                        * tier_resource_config.max_replicas,
+                        model_pool_size=tier_resource_config.max_models_per_replica * 2,
                     )
-                    
+
                     # Create the deployment
                     if self.create_pooled_deployment(pooled_config):
                         created_pools[tier].append(deployment_name)
-                        self.tier_deployments[tier][deployment_name] = self.deployments[deployment_name]
-                        self.logger.info(f"Created {tier} tier pool: {deployment_name} with "
-                                       f"{tier_resource_config.num_cpus} CPUs, "
-                                       f"{tier_resource_config.num_gpus} GPUs, "
-                                       f"{tier_resource_config.memory}MB memory")
+                        self.tier_deployments[tier][deployment_name] = self.deployments[
+                            deployment_name
+                        ]
+                        self.logger.info(
+                            f"Created {tier} tier pool: {deployment_name} with "
+                            f"{tier_resource_config.num_cpus} CPUs, "
+                            f"{tier_resource_config.num_gpus} GPUs, "
+                            f"{tier_resource_config.memory}MB memory"
+                        )
                     else:
-                        self.logger.error(f"Failed to create {tier} tier pool: {deployment_name}")
-            
+                        self.logger.error(
+                            f"Failed to create {tier} tier pool: {deployment_name}"
+                        )
+
             self.logger.info(f"Created tier-based pools: {dict(created_pools)}")
             return created_pools
-            
+
         except Exception as e:
             self.logger.error(f"Error creating tier-based pools: {e}")
             return created_pools
-    
-    def _calculate_pools_per_tier(self, tier: str, tier_config: TierResourceConfig) -> int:
+
+    def _calculate_pools_per_tier(
+        self, tier: str, tier_config: TierResourceConfig
+    ) -> int:
         """Calculate number of pools needed per tier based on expected load"""
         if tier == ModelTier.HOT:
             return 3  # More pools for high-priority models
@@ -177,23 +193,69 @@ class PooledModelDeployment:
             return 2  # Medium number of pools
         else:  # COLD
             return 1  # Minimal pools for cold models
-    
+
     def get_tier_deployment(self, tier: str, model_name: str = None) -> Optional[str]:
         """Get appropriate deployment for a tier, with optional model-specific routing"""
         if tier not in self.tier_deployments or not self.tier_deployments[tier]:
             return None
-        
+
         # Simple round-robin selection for now
         # TODO: Implement intelligent load balancing
         deployments = list(self.tier_deployments[tier].keys())
         if not deployments:
             return None
-        
+
         # For now, return the first available deployment
         # In production, this should consider load balancing
         return deployments[0]
-    
-    def migrate_model_to_tier(self, model_name: str, old_tier: str, new_tier: str) -> bool:
+
+    async def preload_model_into_deployment(
+        self, deployment_name: str, model_name: str
+    ) -> bool:
+        """Pre-load a model into a specific deployment pool"""
+        try:
+            if deployment_name not in self.deployments:
+                self.logger.error(f"Deployment {deployment_name} not found")
+                return False
+
+            self.logger.info(
+                f"Pre-loading model {model_name} into deployment {deployment_name}"
+            )
+
+            # Get the Ray Serve deployment handle
+
+            try:
+                deployment_handle = serve.get_app_handle(deployment_name)
+
+                # Call the preload_model method on the deployment
+                result = await deployment_handle.preload_model.remote(model_name)
+
+                if result.get("status") == "success":
+                    self.logger.info(
+                        f"Successfully pre-loaded model {model_name} into deployment {deployment_name}"
+                    )
+                    return True
+                else:
+                    self.logger.error(
+                        f"Failed to pre-load model {model_name}: {result.get('message')}"
+                    )
+                    return False
+
+            except Exception as e:
+                self.logger.error(
+                    f"Error getting deployment handle for {deployment_name}: {e}"
+                )
+                return False
+
+        except Exception as e:
+            self.logger.error(
+                f"Error pre-loading model {model_name} into deployment {deployment_name}: {e}"
+            )
+            return False
+
+    def migrate_model_to_tier(
+        self, model_name: str, old_tier: str, new_tier: str
+    ) -> bool:
         """Migrate a model from one tier to another"""
         try:
             # This is a placeholder for model migration logic
@@ -201,14 +263,16 @@ class PooledModelDeployment:
             # 1. Remove model from old tier deployment
             # 2. Add model to new tier deployment
             # 3. Update routing tables
-            
-            self.logger.info(f"Migrating model {model_name} from {old_tier} to {new_tier}")
-            
+
+            self.logger.info(
+                f"Migrating model {model_name} from {old_tier} to {new_tier}"
+            )
+
             # For now, just log the migration
             # TODO: Implement actual model migration between deployments
-            
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Error migrating model {model_name}: {e}")
             return False
@@ -336,7 +400,7 @@ class PooledModelDeployment:
 
         try:
             # Get health check from deployment
-            handle = serve.get_deployment_handle(deployment_name).get_handle()
+            handle = serve.get_app_handle(deployment_name)
             health = ray.get(handle.health_check.remote())
             return health
         except Exception as e:

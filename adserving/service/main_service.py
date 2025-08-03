@@ -1,6 +1,7 @@
 """
 Main service class for Anomaly Detection Serve
 """
+
 import logging
 import os
 import signal
@@ -74,9 +75,9 @@ class AnomalyDetectionServe:
             return
 
         # Update from config
-        if hasattr(self.config, 'api_host'):
+        if hasattr(self.config, "api_host"):
             self.host = self.config.api_host
-        if hasattr(self.config, 'api_port'):
+        if hasattr(self.config, "api_port"):
             self.port = self.config.api_port
 
         # Override with environment variables
@@ -112,9 +113,11 @@ class AnomalyDetectionServe:
 
             # 6. Deploy production models
             logger.info("Deploying production models...")
-            model_stats = self.components.deploy_production_models()
-            self._loaded_model_count = model_stats['loaded']
-            self._failed_model_count = model_stats['failed']
+            import asyncio
+
+            model_stats = asyncio.run(self.components.deploy_production_models())
+            self._loaded_model_count = model_stats["loaded"]
+            self._failed_model_count = model_stats["failed"]
 
             # 7. Start background services
             logger.info("Starting background services...")
@@ -125,12 +128,13 @@ class AnomalyDetectionServe:
             self.components.update_readiness_state(
                 ready=True,
                 models_loaded=self._loaded_model_count,
-                models_failed=self._failed_model_count
+                models_failed=self._failed_model_count,
             )
 
             # 9. Start FastAPI server
             logger.info(f"Starting server on {self.host}:{self.port}")
             from .service_initializer import ServiceInitializer
+
             initializer = ServiceInitializer()
             app_instance = initializer.initialize_app(self.config)
 
@@ -141,7 +145,7 @@ class AnomalyDetectionServe:
                 host=self.host,
                 port=self.port,
                 log_level="info",
-                access_log=True
+                access_log=True,
             )
 
         except KeyboardInterrupt:

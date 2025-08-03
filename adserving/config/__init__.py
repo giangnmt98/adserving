@@ -1,23 +1,15 @@
 """
-Configuration module for Anomaly Detection Serve
-
-This module provides a modular configuration system with backward compatibility.
-All classes and functions are imported to maintain existing API.
+Configuration package initialization
+Avoiding circular imports by carefully ordering imports
 """
 
-# Import base types
+# Import base types first
 from .base_types import ModelTier, ResourceSharingStrategy, RoutingStrategy
 
-# Import main config and utilities
-from .config_manager import (
-    Config,
-    create_sample_config,
-    get_config,
-    load_config,
-    set_config,
-)
+# Import deployment types
+from .deployment_types import AutoscalingSettings, PooledResourceConfig
 
-# Import core configurations
+# Import core configs
 from .core_configs import (
     AnomalyDetectionConfig,
     MLflowConfig,
@@ -28,10 +20,7 @@ from .core_configs import (
     TieredLoadingConfig,
 )
 
-# Import deployment types
-from .deployment_types import AutoscalingSettings, PooledResourceConfig
-
-# Import system configurations
+# Import system configs
 from .system_configs import (
     BatchProcessingConfig,
     ConnectionPoolingConfig,
@@ -41,34 +30,48 @@ from .system_configs import (
     SecurityConfig,
 )
 
+# Import config manager (without direct TierBasedDeploymentConfig import)
+from .config_manager import (
+    Config,
+    _global_config,
+    create_sample_config,
+    get_config,
+    load_config,
+    set_config,
+)
+
 # Export all for backward compatibility
 __all__ = [
     # Base types
-    "ResourceSharingStrategy",
     "ModelTier",
+    "ResourceSharingStrategy",
     "RoutingStrategy",
+
     # Deployment types
-    "PooledResourceConfig",
     "AutoscalingSettings",
-    # Core configurations
-    "MLflowConfig",
-    "RayConfig",
-    "TieredLoadingConfig",
-    "ResourceSharingConfig",
-    "PooledDeploymentSettings",
-    "RoutingConfig",
+    "PooledResourceConfig",
+
+    # Core configs
     "AnomalyDetectionConfig",
-    # System configurations
-    "MonitoringConfig",
-    "LoggingConfig",
-    "SecurityConfig",
-    "PerformanceConfig",
+    "MLflowConfig",
+    "PooledDeploymentSettings",
+    "RayConfig",
+    "ResourceSharingConfig",
+    "RoutingConfig",
+    "TieredLoadingConfig",
+
+    # System configs
     "BatchProcessingConfig",
     "ConnectionPoolingConfig",
-    # Main config and utilities
+    "LoggingConfig",
+    "MonitoringConfig",
+    "PerformanceConfig",
+    "SecurityConfig",
+
+    # Config manager
     "Config",
-    "load_config",
-    "create_sample_config",
     "get_config",
+    "load_config",
     "set_config",
+    "create_sample_config",
 ]

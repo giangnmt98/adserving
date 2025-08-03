@@ -2,9 +2,10 @@
 Ray Serve initialization and management
 Handles Ray Serve startup with proper configuration
 """
+
 import logging
 import os
-
+from ray import serve
 from ..config.config import Config
 from .port_manager import PortManager
 
@@ -23,25 +24,17 @@ class RayManager:
         logger.info("Initializing Ray Serve...")
 
         try:
-            import ray
-            from ray import serve
-
             # Configure Ray logging
             self._configure_ray_logging(config)
 
             # Find available port for Ray Serve
-            api_port = getattr(config, 'api_port', 8000)
-            ray_port = self.port_manager.find_available_port(
-                api_port + 1, "127.0.0.1"
-            )
+            api_port = getattr(config, "api_port", 8000)
+            ray_port = self.port_manager.find_available_port(api_port + 1, "127.0.0.1")
 
             logger.info(f"Ray Serve HTTP proxy using port {ray_port}")
 
             # Start Ray Serve
-            serve.start(http_options={
-                "host": "127.0.0.1",
-                "port": ray_port
-            })
+            serve.start(http_options={"host": "127.0.0.1", "port": ray_port})
 
             logger.info(f"Ray Serve initialized on port {ray_port}")
 

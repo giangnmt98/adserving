@@ -2,6 +2,7 @@
 MLflow connection management
 Handles MLflow server connection verification with retry logic
 """
+
 import logging
 import time
 
@@ -13,8 +14,9 @@ logger = logging.getLogger(__name__)
 class MLflowManager:
     """Manages MLflow server connections"""
 
-    def verify_connection(self, config: Config, max_retries: int = 3,
-                         retry_delay: float = 2.0) -> bool:
+    def verify_connection(
+        self, config: Config, max_retries: int = 3, retry_delay: float = 2.0
+    ) -> bool:
         """Verify MLflow connection with retry mechanism."""
         mlflow_uri = config.mlflow.tracking_uri
         logger.info(f"Verifying MLflow connection to: {mlflow_uri}")
@@ -30,8 +32,9 @@ class MLflowManager:
         self._log_connection_failure(mlflow_uri, max_retries)
         return False
 
-    def _attempt_connection(self, mlflow_uri: str, attempt: int,
-                           max_retries: int) -> bool:
+    def _attempt_connection(
+        self, mlflow_uri: str, attempt: int, max_retries: int
+    ) -> bool:
         """Attempt a single MLflow connection."""
         try:
             logger.info(f"MLflow connection attempt {attempt}/{max_retries}...")
@@ -51,8 +54,7 @@ class MLflowManager:
             logger.warning(f"Attempt {attempt}/{max_retries} failed: {e}")
             return False
 
-    def _log_connection_failure(self, mlflow_uri: str,
-                               max_retries: int) -> None:
+    def _log_connection_failure(self, mlflow_uri: str, max_retries: int) -> None:
         """Log detailed connection failure information."""
         logger.error("=" * 70)
         logger.error("CRITICAL: MLflow Connection Failed!")

@@ -65,7 +65,9 @@ class ModelManager:
         self.tier_config = self._load_tier_config()
 
         # Deployment manager
-        self.deployment_manager = DeploymentManager(load_model_func=self._load_model_sync)
+        self.deployment_manager = DeploymentManager(
+            load_model_func=self._load_model_sync
+        )
 
         # Initialize services
         self.monitoring_service = ModelMonitoringService(

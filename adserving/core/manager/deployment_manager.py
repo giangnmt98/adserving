@@ -14,7 +14,9 @@ from typing import Any, Dict, List, Optional
 class DeploymentManager:
     """Manages zero-downtime model deployments"""
 
-    def __init__(self, batch_size: int = 5, batch_interval: float = 2.0, load_model_func=None):
+    def __init__(
+        self, batch_size: int = 5, batch_interval: float = 2.0, load_model_func=None
+    ):
         self.logger = logging.getLogger(__name__)
         self._batch_size = batch_size
         self._batch_interval = batch_interval

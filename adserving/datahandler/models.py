@@ -62,6 +62,9 @@ class PredictionRequest(BaseModel):
         if not v:
             raise ValueError("Trường data không được rỗng")
 
+        # Store validation errors for FNxx fields
+        validation_errors = []
+
         for i, item in enumerate(v):
             if not isinstance(item, dict):
                 raise ValueError(
@@ -97,25 +100,46 @@ class PredictionRequest(BaseModel):
                     f"phải có ít nhất một trường FN (ví dụ: FN01, FN02, ...)"
                 )
 
-            # Validate FN field types
+            # Validate FN field types and values - collect errors instead of raising
+            ma_tieu_chi = item.get("ma_tieu_chi", f"element_{i+1}")
             for fn_field in fn_fields:
                 fn_value = item[fn_field]
+                
+                # Check type
                 if not isinstance(fn_value, (int, float)):
-                    raise ValueError(
-                        f"Trường {fn_field} trong phần tử thứ {i+1} "
-                        f"phải là kiểu số (number), "
-                        f"nhận được kiểu {type(fn_value).__name__}"
-                    )
+                    validation_errors.append({
+                        "ma_tieu_chi": ma_tieu_chi,
+                        "fld_code": fn_field,
+                        "error_message": "data không hợp lệ",
+                        "detail": f"Trường {fn_field} phải là kiểu số (number), nhận được kiểu {type(fn_value).__name__}"
+                    })
+                    continue
 
                 # Check for reasonable numeric values
                 if isinstance(fn_value, (int, float)) and (
                     fn_value < 0 or fn_value > 1e15
                 ):
-                    raise ValueError(
-                        f"Trường {fn_field} trong phần tử thứ {i+1} "
-                        f"có giá trị không hợp lệ: {fn_value}. "
-                        f"Giá trị phải từ 0 đến 1,000,000,000,000,000"
-                    )
+                    validation_errors.append({
+                        "ma_tieu_chi": ma_tieu_chi,
+                        "fld_code": fn_field,
+                        "error_message": "data không hợp lệ",
+                        "detail": f"Trường {fn_field} có giá trị không hợp lệ: {fn_value}. Giá trị phải từ 0 đến 1,000,000,000,000,000"
+                    })
+
+        # Store validation errors in the data for later processing
+        if validation_errors:
+            # Add validation errors to the data structure for later processing
+            for item in v:
+                if not hasattr(item, '_validation_errors'):
+                    item['_validation_errors'] = []
+            
+            # Distribute errors to their respective items
+            for error in validation_errors:
+                for item in v:
+                    if item.get("ma_tieu_chi") == error["ma_tieu_chi"]:
+                        if '_validation_errors' not in item:
+                            item['_validation_errors'] = []
+                        item['_validation_errors'].append(error)
 
         return v
 

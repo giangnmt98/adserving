@@ -331,9 +331,9 @@ class MetricsCollector:
                     avg_response_time = statistics.mean(response_times)
 
                     # Penalize high error rates and slow response times
-                    model_score = int(max(
-                        0, 100 - (avg_error_rate * 1000) - (avg_response_time * 10)
-                    ))
+                    model_score = int(
+                        max(0, 100 - (avg_error_rate * 1000) - (avg_response_time * 10))
+                    )
 
             # Weighted average
             health_score = (

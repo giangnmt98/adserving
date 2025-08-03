@@ -2,6 +2,7 @@
 Port management utilities
 Handles port availability checking and conflict resolution
 """
+
 import logging
 import socket
 
@@ -21,8 +22,7 @@ class PortManager:
         except OSError:
             return False
 
-    def find_available_port(self, start_port: int,
-                           host: str = "0.0.0.0") -> int:
+    def find_available_port(self, start_port: int, host: str = "0.0.0.0") -> int:
         """Find an available port starting from start_port."""
         for port in range(start_port, start_port + 100):
             if self.is_port_available(host, port):
