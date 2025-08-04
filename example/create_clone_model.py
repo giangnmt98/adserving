@@ -1,4 +1,4 @@
-# train_clone_models.py
+# train_clone_models.py (parallel version)
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import IsolationForest
@@ -11,9 +11,11 @@ import json
 import os
 import random
 import string
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 mlflow.set_tracking_uri("http://localhost:5000")
 mlflow.set_experiment("Anomaly_Detection_Models")
+
 
 class SimpleAnomalyDetectionModel:
     def __init__(self):
@@ -83,6 +85,7 @@ class SimpleAnomalyDetectionModel:
                 registered_model_name=model_name
             )
             run_id = mlflow.active_run().info.run_id
+
         time.sleep(1)
         client = mlflow.tracking.MlflowClient()
         versions = client.get_latest_versions(model_name, stages=["None"])
@@ -90,17 +93,33 @@ class SimpleAnomalyDetectionModel:
             version = versions[0].version
             client.transition_model_version_stage(model_name, version, stage="Production")
             print(f"{model_name} v{version} chuyển Production")
-        return model_name
+        return {
+            "model_name": model_name,
+            "ma_don_vi": model_name.split("_")[0],
+            "ma_bao_cao": model_name.split("_")[1],
+            "ma_tieu_chi": model_name.split("_")[2],
+            "fld_code": model_name.split("_")[-1]
+        }
+
+
+def train_and_register_single_task(sub_data, row, i):
+    detector = SimpleAnomalyDetectionModel()
+    random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    new_chi_tieu = f"{row['ma_tieu_chi']}_R{random_suffix}"
+    model_name = f"{row['ma_don_vi']}_{row['ma_bao_cao']}_{new_chi_tieu}_{row['fld_code']}"
+    model, scaler = detector.train_model(sub_data)
+    return detector.save_to_mlflow(model, scaler, model_name, len(sub_data))
+
 
 if __name__ == "__main__":
-    N = 5  # số bản sao cho mỗi model gốc
+    N = 50
+    MAX_WORKERS = 16
     data_path = "./data/bao_cao_dulieu_not_none.csv"
     data = pd.read_csv(data_path)
     data['ky_du_lieu'] = pd.to_datetime(data['ky_du_lieu'])
-    model_list = []
 
-    detector = SimpleAnomalyDetectionModel()
     combos = data.drop_duplicates(subset=['ma_don_vi', 'ma_bao_cao', 'ma_tieu_chi', 'fld_code'])
+    tasks = []
 
     for _, row in combos.iterrows():
         sub_data = data[(data['ma_don_vi'] == row['ma_don_vi']) &
@@ -109,24 +128,25 @@ if __name__ == "__main__":
                         (data['fld_code'] == row['fld_code'])]
         if len(sub_data) < 5:
             continue
-
         for i in range(1, N + 1):
-            random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            new_chi_tieu = f"{row['ma_tieu_chi']}_R{random_suffix}"
-            model_name = f"{row['ma_don_vi']}_{row['ma_bao_cao']}_{new_chi_tieu}_{row['fld_code']}"
-            model, scaler = detector.train_model(sub_data)
-            registered_name = detector.save_to_mlflow(model, scaler, model_name, len(sub_data))
-            model_list.append({
-                "model_name": registered_name,
-                "ma_don_vi": row['ma_don_vi'],
-                "ma_bao_cao": row['ma_bao_cao'],
-                "ma_tieu_chi": registered_name.split("_")[2],
-                "fld_code": row['fld_code']
-            })
+            tasks.append((sub_data.copy(), row, i))
 
-    # Export danh sách model clone
+    results = []
+    print(f"⚙️ Running {len(tasks)} model clones in parallel...")
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_cfg = {
+            executor.submit(train_and_register_single_task, *task): task for task in tasks
+        }
+        for future in as_completed(future_to_cfg):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                print(f"Task failed: {str(e)}")
+
     output_path = "generated_model_names.json"
     with open(output_path, "w") as f:
-        json.dump(model_list, f, indent=2, ensure_ascii=False)
+        json.dump(results, f, indent=2, ensure_ascii=False)
 
-    print(f"Đã lưu {len(model_list)} model clone vào {output_path}")
+    print(f"Đã lưu {len(results)} model clone vào {output_path}")

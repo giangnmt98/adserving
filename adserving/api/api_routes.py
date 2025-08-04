@@ -7,8 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.exceptions import RequestValidationError
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from adserving.config.config import get_config
@@ -60,11 +59,6 @@ def create_app(api_prefix: str = "") -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Register exception handlers
-    app.add_exception_handler(HTTPException, exception_handlers.http_exception_handler)
-    app.add_exception_handler(
-        RequestValidationError, exception_handlers.validation_exception_handler
-    )
     app.add_exception_handler(Exception, exception_handlers.general_exception_handler)
 
     # Include routers

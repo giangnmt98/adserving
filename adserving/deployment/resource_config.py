@@ -86,7 +86,9 @@ class TierResourceConfig:
 class BusinessCriticalModelsConfig:
     """Configuration for business-critical models"""
 
-    explicit_assignments: Dict[str, str] = field(default_factory=dict)  # model_name -> tier
+    explicit_assignments: Dict[str, str] = field(
+        default_factory=dict
+    )  # model_name -> tier
     patterns: Dict[str, str] = field(default_factory=dict)  # pattern -> tier
     default_business_critical_tier: str = "hot"  # Default tier for business critical
     prevent_automatic_changes: bool = True  # Prevent auto tier changes
@@ -114,11 +116,9 @@ class TierBasedDeploymentConfig:
     routing_strategy: str = "least_loaded"  # FIXED: Added routing_strategy field
 
     # Tier routing weights (higher = more preferred)
-    tier_routing_weights: Dict[str, float] = field(default_factory=lambda: {
-        "hot": 1.0,
-        "warm": 0.7,
-        "cold": 0.3
-    })
+    tier_routing_weights: Dict[str, float] = field(
+        default_factory=lambda: {"hot": 1.0, "warm": 0.7, "cold": 0.3}
+    )
 
     # Monitoring and health checks
     tier_monitoring_interval: int = 30  # Tier evaluation interval (seconds)
@@ -137,7 +137,9 @@ class TierBasedDeploymentConfig:
             self.tier_configs = self._get_default_tier_configs()
 
         # Convert dict tier_configs to TierResourceConfig objects if needed
-        if self.tier_configs and isinstance(next(iter(self.tier_configs.values())), dict):
+        if self.tier_configs and isinstance(
+            next(iter(self.tier_configs.values())), dict
+        ):
             converted_configs = {}
             for tier_name, tier_config in self.tier_configs.items():
                 if isinstance(tier_config, dict):
@@ -151,10 +153,17 @@ class TierBasedDeploymentConfig:
 
         # Initialize business_critical_models if it's a dict
         if isinstance(self.business_critical_models, dict):
-            self.business_critical_models = BusinessCriticalModelsConfig(**self.business_critical_models)
+            self.business_critical_models = BusinessCriticalModelsConfig(
+                **self.business_critical_models
+            )
 
         # Validate routing_strategy
-        valid_strategies = ["least_loaded", "round_robin", "fastest_response", "model_affinity"]
+        valid_strategies = [
+            "least_loaded",
+            "round_robin",
+            "fastest_response",
+            "model_affinity",
+        ]
         if self.routing_strategy not in valid_strategies:
             self.routing_strategy = "least_loaded"
 
@@ -249,6 +258,7 @@ class TierBasedDeploymentConfig:
 
         # Simple wildcard matching
         import re
+
         regex_pattern = pattern.replace("*", ".*")
         return bool(re.match(f"^{regex_pattern}$", model_name))
 
@@ -260,7 +270,9 @@ class TierBasedDeploymentConfig:
         # Validate each tier config
         for tier_name, tier_config in self.tier_configs.items():
             if tier_config.min_replicas > tier_config.max_replicas:
-                raise ValueError(f"Tier {tier_name}: min_replicas cannot exceed max_replicas")
+                raise ValueError(
+                    f"Tier {tier_name}: min_replicas cannot exceed max_replicas"
+                )
 
             if tier_config.num_cpus <= 0:
                 raise ValueError(f"Tier {tier_name}: num_cpus must be positive")
@@ -289,7 +301,7 @@ class TierBasedDeploymentConfig:
         # Convert tier configs
         tier_configs_dict = {}
         for tier_name, tier_config in self.tier_configs.items():
-            if hasattr(tier_config, '__dict__'):
+            if hasattr(tier_config, "__dict__"):
                 tier_configs_dict[tier_name] = tier_config.__dict__
             else:
                 tier_configs_dict[tier_name] = tier_config
@@ -309,7 +321,7 @@ class TierBasedDeploymentConfig:
         result["health_check_enabled"] = self.health_check_enabled
 
         # Convert business critical models
-        if hasattr(self.business_critical_models, '__dict__'):
+        if hasattr(self.business_critical_models, "__dict__"):
             result["business_critical_models"] = self.business_critical_models.__dict__
         else:
             result["business_critical_models"] = self.business_critical_models

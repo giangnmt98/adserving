@@ -11,7 +11,7 @@ from mlflow.tracking import MlflowClient
 from urllib3.util.retry import Retry
 
 
-class OptimizedMLflowClient:
+class MLflowClient:
     """MLflow client wrapper with connection pooling optimization"""
 
     def __init__(self, tracking_uri: str):

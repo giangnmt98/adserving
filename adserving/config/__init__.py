@@ -33,7 +33,6 @@ from .system_configs import (
 # Import config manager (without direct TierBasedDeploymentConfig import)
 from .config_manager import (
     Config,
-    _global_config,
     create_sample_config,
     get_config,
     load_config,
@@ -46,11 +45,9 @@ __all__ = [
     "ModelTier",
     "ResourceSharingStrategy",
     "RoutingStrategy",
-
     # Deployment types
     "AutoscalingSettings",
     "PooledResourceConfig",
-
     # Core configs
     "AnomalyDetectionConfig",
     "MLflowConfig",
@@ -59,7 +56,6 @@ __all__ = [
     "ResourceSharingConfig",
     "RoutingConfig",
     "TieredLoadingConfig",
-
     # System configs
     "BatchProcessingConfig",
     "ConnectionPoolingConfig",
@@ -67,7 +63,6 @@ __all__ = [
     "MonitoringConfig",
     "PerformanceConfig",
     "SecurityConfig",
-
     # Config manager
     "Config",
     "get_config",

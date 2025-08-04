@@ -57,8 +57,7 @@ def get_model_manager() -> ModelManager:
     """Get model manager dependency with proper error handling"""
     if model_manager is None:
         raise HTTPException(
-            status_code=503,
-            detail="Service unavailable: Model manager not initialized"
+            status_code=503, detail="Service unavailable: Model manager not initialized"
         )
     return model_manager
 
@@ -67,71 +66,16 @@ def get_model_router() -> ModelRouter:
     """Get model router dependency with proper error handling"""
     if model_router is None:
         raise HTTPException(
-            status_code=503,
-            detail="Service unavailable: Model router not initialized"
+            status_code=503, detail="Service unavailable: Model router not initialized"
         )
     return model_router
-
-
-def get_unified_model_router():
-    """
-    Get unified model router - enhanced wrapper around existing ModelRouter.
-
-    Returns UnifiedModelRouter if enhanced error handling is enabled,
-    otherwise returns regular ModelRouter for backward compatibility.
-    """
-    global _unified_router_cache
-
-    if not _enhanced_error_handling_enabled:
-        # Return regular router for backward compatibility
-        return get_model_router()
-
-    if _unified_router_cache is None:
-        try:
-            # Lazy import to avoid circular dependencies
-            from adserving.router.unified_model_router import UnifiedModelRouter
-            from adserving.router.unified_model_router_helpers import (
-                UnifiedModelRouterHelpers
-            )
-
-            existing_router = get_model_router()
-            logger.info("Creating unified router wrapper")
-
-            _unified_router_cache = UnifiedModelRouter(existing_router, logger)
-
-            # Inject helper methods
-            _unified_router_cache._create_model_name_error = (
-                UnifiedModelRouterHelpers.create_model_name_error
-            )
-            _unified_router_cache._create_model_not_found_error = (
-                UnifiedModelRouterHelpers.create_model_not_found_error
-            )
-            _unified_router_cache._create_model_unavailable_error = (
-                UnifiedModelRouterHelpers.create_model_unavailable_error
-            )
-            _unified_router_cache._create_model_load_error = (
-                UnifiedModelRouterHelpers.create_model_load_error
-            )
-            _unified_router_cache._create_deployment_unavailable_error = (
-                UnifiedModelRouterHelpers.create_deployment_unavailable_error
-            )
-
-        except ImportError as e:
-            logger.warning(
-                f"Enhanced error handling components not available: {e}"
-            )
-            logger.warning("Falling back to regular ModelRouter")
-            return get_model_router()
-
-    return _unified_router_cache
 
 
 def get_monitor() -> ModelMonitor:
     """Get monitor dependency with proper error handling"""
     if monitor is None:
         raise HTTPException(
-            status_code=503,
-            detail="Service unavailable: Monitor not initialized"
+            status_code=503, detail="Service unavailable: Monitor not initialized"
         )
     return monitor
 
@@ -140,8 +84,7 @@ def get_input_handler() -> DataHandler:
     """Get input handler dependency with proper error handling"""
     if data_handler is None:
         raise HTTPException(
-            status_code=503,
-            detail="Service unavailable: Input handler not initialized"
+            status_code=503, detail="Service unavailable: Input handler not initialized"
         )
     return data_handler
 
@@ -186,8 +129,7 @@ def initialize_dependencies(
     use_tier_based_deployment = tier_based
 
     logger.info(
-        f"API dependencies initialized successfully "
-        f"(tier-based: {tier_based})"
+        f"API dependencies initialized successfully " f"(tier-based: {tier_based})"
     )
 
 
@@ -205,16 +147,14 @@ def enable_enhanced_error_handling(enabled: bool = True) -> None:
     # Clear cache to force re-creation with new settings
     _unified_router_cache = None
 
-    logger.info(
-        f"Enhanced error handling: "
-        f"{'enabled' if enabled else 'disabled'}"
-    )
+    logger.info(f"Enhanced error handling: " f"{'enabled' if enabled else 'disabled'}")
 
 
 def get_request_context_extractor():
     """Get request context extractor for enhanced error handling."""
     try:
         from adserving.utils.context_extractor import RequestContextExtractor
+
         return RequestContextExtractor
     except ImportError as e:
         logger.warning(f"Context extractor not available: {e}")
@@ -222,10 +162,7 @@ def get_request_context_extractor():
 
 
 def update_service_readiness(
-    ready: bool,
-    models_loaded: int,
-    models_failed: int,
-    initialization_complete: bool
+    ready: bool, models_loaded: int, models_failed: int, initialization_complete: bool
 ) -> None:
     """Update service readiness state from main service"""
     global service_readiness
@@ -253,7 +190,7 @@ def get_service_info() -> Dict[str, Any]:
             "data_handler": data_handler is not None,
             "tier_orchestrator": tier_orchestrator is not None,
             "unified_router": _unified_router_cache is not None,
-        }
+        },
     }
 
     # Add routing stats if available

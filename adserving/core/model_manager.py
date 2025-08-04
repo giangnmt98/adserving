@@ -19,7 +19,7 @@ from adserving.core.manager.production_model_manager import ProductionModelManag
 from adserving.core.service.model_loader_service import ModelLoaderService
 from adserving.core.service.monitoring_service import ModelMonitoringService
 from adserving.core.service.prediction_service import PredictionService
-from adserving.core.utils.mlflow_client import OptimizedMLflowClient
+from adserving.core.utils.mlflow_client import MLflowClient
 from adserving.core.utils.model_info import ModelInfo, ModelTier
 from adserving.core.utils.tiered_model_cache import TieredModelCache
 
@@ -49,7 +49,7 @@ class ModelManager:
         self.cache = TieredModelCache(hot_cache_size, warm_cache_size, cold_cache_size)
 
         # MLflow client with connection pooling optimization
-        self.mlflow_client = OptimizedMLflowClient(mlflow_tracking_uri)
+        self.mlflow_client = MLflowClient(mlflow_tracking_uri)
 
         # Threading - Limit worker count to prevent OOM issues
         cpu_count = os.cpu_count() or 1

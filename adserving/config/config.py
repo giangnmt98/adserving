@@ -41,15 +41,18 @@ from .system_configs import (
     SecurityConfig,
 )
 
+
 # Lazy import function for TierBasedDeploymentConfig
 def get_tier_based_deployment_config():
     """Get TierBasedDeploymentConfig class with lazy import"""
     try:
         from ..deployment.resource_config import TierBasedDeploymentConfig
+
         return TierBasedDeploymentConfig
     except ImportError as e:
         print(f"Warning: Could not import TierBasedDeploymentConfig: {e}")
         return None
+
 
 # Module docstring for documentation
 __doc__ = """

@@ -31,7 +31,7 @@ from adserving.router.routing_strategy import RoutingStrategy
 
 
 class ModelRouter:
-    """Intelligent model router with single endpoint strategy"""
+    """Intelligent model router with a single endpoint strategy"""
 
     def __init__(
         self,
@@ -84,104 +84,167 @@ class ModelRouter:
                 self.deployment_loads[deployment_name] = 0
                 self.logger.debug(f"Registered deployment: {deployment_name}")
 
-    def unregister_deployment(self, deployment_name: str):
-        """Unregister a deployment"""
-        with self._lock:
-            if deployment_name in self.available_deployments:
-                self.available_deployments.remove(deployment_name)
-                del self.deployment_loads[deployment_name]
-
-                # Remove model mappings
-                models_to_remove = [
-                    model
-                    for model, dep in self.model_to_deployment.items()
-                    if dep == deployment_name
-                ]
-                for model in models_to_remove:
-                    del self.model_to_deployment[model]
-
-                self.logger.info(f"Unregistered deployment: {deployment_name}")
-
     async def route_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Route request to optimal deployment with error handling"""
-        start_time = time.time()
-        self.request_count += 1
+        """Route batch request with individual element handling"""
 
-        try:
-            # Extract model information
-            model_name = self.model_name_extractor.extract_model_name(request)
-            if not model_name:
-                raise ValueError("Could not determine model name from request")
+        # Extract all prediction tasks
+        prediction_tasks = request.get("prediction_tasks", [])
 
-            # Select optimal deployment
-            deployment_name = await self._select_deployment(model_name, request)
-            if not deployment_name:
-                # Error handling: try to understand why no deployment available
-                error_details = await self._diagnose_deployment_unavailability(
-                    model_name, request
+        results = []
+        failed_elements = []
+
+        # Group tasks by model name for efficiency
+        tasks_by_model = {}
+        for task in prediction_tasks:
+            model_name = self.model_name_extractor.extract_model_name(task)
+            if model_name not in tasks_by_model:
+                tasks_by_model[model_name] = []
+            tasks_by_model[model_name].append(task)
+
+        # Process each model group
+        for model_name, model_tasks in tasks_by_model.items():
+            try:
+                # Check if model/deployment exists
+                deployment_name = await self._select_deployment(
+                    model_name, model_tasks[0]
                 )
-                raise ValueError(error_details)
 
-            # Update routing metrics
-            self._update_routing_metrics(model_name, deployment_name)
+                if not deployment_name:
+                    # Model doesn't exist - add all tasks to failed_elements
+                    error_details = await self._diagnose_deployment_unavailability(
+                        model_name, model_tasks[0]
+                    )
 
-            # Route request to deployment
-            result = await self._send_to_deployment(deployment_name, request)
+                    for task in model_tasks:
+                        failed_elements.append(
+                            {
+                                "element_index": task.get("_element_index", -1),
+                                "ma_tieu_chi": task.get("_ma_tieu_chi", "unknown"),
+                                "model_name": model_name,
+                                "error": "model_not_found",
+                                "error_details": error_details,
+                            }
+                        )
+                    continue
 
-            # Update performance metrics
-            routing_time = time.time() - start_time
-            self.total_routing_time += routing_time
+                # Model exists - process tasks
+                for task in model_tasks:
+                    try:
+                        result = await self._send_to_deployment(deployment_name, task)
+                        results.append(
+                            {
+                                **result,
+                                "element_index": task.get("_element_index", -1),
+                                "ma_tieu_chi": task.get("_ma_tieu_chi", "unknown"),
+                                "model_name": model_name,
+                            }
+                        )
+                    except Exception as task_error:
+                        failed_elements.append(
+                            {
+                                "element_index": task.get("_element_index", -1),
+                                "ma_tieu_chi": task.get("_ma_tieu_chi", "unknown"),
+                                "model_name": model_name,
+                                "error": "prediction_failed",
+                                "error_details": str(task_error),
+                            }
+                        )
 
-            # Update route metrics with response
-            self._update_route_performance(
-                model_name, deployment_name, routing_time, True
-            )
+            except Exception as model_error:
+                # Model group failed - add all tasks to failed_elements
+                for task in model_tasks:
+                    failed_elements.append(
+                        {
+                            "element_index": task.get("_element_index", -1),
+                            "ma_tieu_chi": task.get("_ma_tieu_chi", "unknown"),
+                            "model_name": model_name,
+                            "error": "model_group_failed",
+                            "error_details": str(model_error),
+                        }
+                    )
 
-            return {
-                **result,
-                "routed_to": deployment_name,
-                "routing_time": routing_time,
-            }
-
-        except Exception as e:
-            self.routing_errors += 1
-            self.logger.error(f"Routing error: {e}")
-
-            return {
-                "error": str(e),
-                "status": "routing_error",
-                "routing_time": time.time() - start_time,
-            }
+        return {
+            "status": "partial_success" if results else "failed",
+            "results": results,
+            "failed_elements": failed_elements,
+            "summary": {
+                "total_tasks": len(prediction_tasks),
+                "successful_tasks": len(results),
+                "failed_tasks": len(failed_elements),
+            },
+        }
 
     async def _diagnose_deployment_unavailability(
         self, model_name: str, request: Dict[str, Any]
     ) -> str:
-        """Diagnose why no deployment is available and provide detailed error
-        message"""
+        """Diagnose why no deployment is available WITHOUT triggering model loading"""
         try:
             if not self.available_deployments:
                 return self._get_no_deployments_message()
 
-            self.logger.info(
-                f"Attempting to diagnose model loading issue for: {model_name}"
+            self.logger.warning(
+                f"Model {model_name} - no deployment available, checking MLflow status"
             )
 
+            # ### CRITICAL FIX: Check MLflow status WITHOUT loading model ###
             try:
-                model_info = await self.model_manager.load_model_async(model_name)
+                model_exists = await self._check_mlflow_model_exists_only(model_name)
 
-                if model_info is None:
-                    return await self._check_mlflow_model_status(model_name)
+                if not model_exists:
+                    return self._get_mlflow_model_not_found_message(model_name)
                 else:
+                    # Model exists but no deployment available
                     return self._get_no_deployment_pools_message(model_name)
 
-            except Exception as load_error:
-                return self._get_model_load_error_message(model_name, load_error)
+            except Exception as check_error:
+                return (
+                    f"Could not verify model {model_name} in MLflow: {str(check_error)}"
+                )
 
         except Exception as diag_error:
             return (
                 f"Could not diagnose deployment unavailability for model "
                 f"'{model_name}': {str(diag_error)}"
             )
+
+    async def _check_mlflow_model_exists_only(self, model_name: str) -> bool:
+        """Check if model exists in MLflow WITHOUT attempting to load"""
+        try:
+            from mlflow.tracking import MlflowClient
+
+            client = MlflowClient(tracking_uri=self.model_manager.mlflow_tracking_uri)
+
+            try:
+                # Try new alias-based approach first
+                latest_version = client.get_model_version_by_alias(
+                    model_name, "production"
+                )
+                self.logger.debug(f"Model {model_name} exists with production alias")
+                return True
+            except Exception:
+                # Fallback to search_model_versions
+                try:
+                    versions = client.search_model_versions(
+                        filter_string=f"name='{model_name}'",
+                        order_by=["version_number DESC"],
+                        max_results=1,
+                    )
+                    if versions and len(versions) > 0:
+                        self.logger.debug(f"Model {model_name} exists in MLflow")
+                        return True
+                    else:
+                        self.logger.debug(f"Model {model_name} has no versions")
+                        return False
+                except Exception as search_error:
+                    if "RESOURCE_DOES_NOT_EXIST" in str(search_error):
+                        self.logger.debug(f"Model {model_name} does not exist")
+                        return False
+                    else:
+                        raise search_error
+
+        except Exception as client_error:
+            self.logger.error(f"Error checking model {model_name}: {client_error}")
+            raise client_error
 
     def _get_no_deployments_message(self) -> str:
         return (

@@ -214,21 +214,27 @@ class TierDeploymentOrchestrator:
         if tier == ModelTier.HOT:
             tier_loaded = self.tier_manager.is_model_loaded(model_name)
             tier_deployed = self.tier_manager.is_model_deployed(model_name)
-            
+
             # CRITICAL FIX: Add ModelManager fallback check for robustness
-            if not tier_loaded and hasattr(self.model_manager, 'is_model_loaded'):
+            if not tier_loaded and hasattr(self.model_manager, "is_model_loaded"):
                 try:
                     # Check if model is actually loaded in ModelManager
-                    model_manager_loaded = await self.model_manager.is_model_loaded(model_name)
+                    model_manager_loaded = await self.model_manager.is_model_loaded(
+                        model_name
+                    )
                     if model_manager_loaded:
                         # Synchronize TierManager state if out of sync
                         self.tier_manager.loaded_models.add(model_name)
                         self.tier_manager.deployed_models.add(model_name)
-                        logger.info(f"Synchronized TierManager state for {model_name} from ModelManager")
+                        logger.info(
+                            f"Synchronized TierManager state for {model_name} from ModelManager"
+                        )
                         return False  # No lazy loading needed
                 except Exception as e:
-                    logger.debug(f"ModelManager fallback check failed for {model_name}: {e}")
-            
+                    logger.debug(
+                        f"ModelManager fallback check failed for {model_name}: {e}"
+                    )
+
             return not (tier_loaded and tier_deployed)
 
         # WARM tier models should be loaded but may need deployment

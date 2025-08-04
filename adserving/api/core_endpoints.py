@@ -32,8 +32,8 @@ router = APIRouter()
 
 @router.get("/", response_model=ServiceInfoResponse)
 async def service_info(
-        manager: ModelManager = Depends(get_model_manager),
-        model_router: ModelRouter = Depends(get_model_router),
+    manager: ModelManager = Depends(get_model_manager),
+    model_router: ModelRouter = Depends(get_model_router),
 ):
     """Get service information and status"""
     try:
@@ -55,34 +55,33 @@ async def service_info(
                 "service_info": "/",
                 "health_check": "/health",
                 "readiness_check": "/ready",
-
                 # Prediction Endpoints
                 "predict": "/predict",
                 "prediction_health_check": "/predict/health",
-
                 # Model Management Endpoints
                 "model_stats": "/models/stats",
                 "model_info": "/models/{model_name}/info",
                 "deployment_stats": "/models/deployment-stats",
-
                 # Tier Management Endpoints
                 "set_manual_tier_assignment": "POST /tier/manual-assignment",
-                "remove_manual_tier_assignment": "DELETE /tier/manual-assignment/{model_name}",
-                "get_manual_tier_assignment": "GET /tier/manual-assignment/{model_name}",
-                "get_business_critical_models": "GET /tier/business-critical-models",
-                "add_business_critical_pattern": "POST /tier/business-critical-pattern",
-                "remove_business_critical_pattern": "DELETE /tier/business-critical-pattern/{pattern_id}",
-                "bulk_assign_business_critical_models": "POST /tier/bulk-assign-business-critical",
-
+                "remove_manual_tier_assignment": "DELETE /tier"
+                "/manual-assignment/{model_name}",
+                "get_manual_tier_assignment": "GET /tier/"
+                "manual-assignment/{model_name}",
+                "get_business_critical_models": "GET /tier/" "business-critical-models",
+                "add_business_critical_pattern": "POST /tier/"
+                "business-critical-pattern",
+                "remove_business_critical_pattern": "DELETE /tier"
+                "/business-critical-pattern/{pattern_id}",
+                "bulk_assign_business_critical_models": "POST /tier/"
+                "bulk-assign-business-critical",
                 # Monitoring & Metrics Endpoints
                 "routing_stats": "/routing/stats",
                 "cache_stats": "/cache/stats",
                 "dashboard_data": "/dashboard",
                 "prometheus_metrics": "/metrics",
-
                 # MLflow Integration Endpoints (if enabled)
                 "mlflow_endpoint": "/deployments/{endpoint_name}",
-
                 # System Endpoints
                 "api_documentation": "/docs",
                 "openapi_schema": "/openapi.json",

@@ -19,6 +19,7 @@ class ModelNameExtractor:
         """Extract model name from request using multiple patterns with caching
         optimization"""
         # Create cache key from request structure
+        print("AAAAAAAAAAAA", request)
         cache_key = self._create_cache_key(request)
 
         with self._cache_lock:

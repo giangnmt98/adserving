@@ -17,7 +17,7 @@ ray:
   dashboard_host: "127.0.0.1"    # Ray dashboard web UI host
   dashboard_port: 8265           # Ray dashboard port (http://localhost:8265)
   object_store_memory: 8000      # Shared memory cho model weights/data
-  num_cpus: 8                 # null = auto-detect CPU cores
+  num_cpus: 20                 # null = auto-detect CPU cores
   num_gpus: 0                 # null = auto-detect GPU cards
   runtime_env: null              # Python dependencies, env vars for Ray workers
   log_level: "INFO"              # Ray internal logging (DEBUG/INFO/WARNING/ERROR)
@@ -34,14 +34,14 @@ mlflow:
 
 # 4. Pooled Deployment - Quản lý pools cho hundreds models
 pooled_deployment:
-  default_pool_count: 1         # Số pools khởi tạo (2-5 pools thường đủ)
+  default_pool_count: 5         # Số pools khởi tạo (2-5 pools thường đủ)
   models_per_pool: 50            # Số models tối đa mỗi pool (50-100)
   enable_cross_pool_balancing: true  # Cân bằng tải giữa pools
   pool_rebalancing_interval: 600     # Interval rebalance (10 phút)
 
   # Resource allocation cho mỗi pool
   pool_resource_config:
-    num_cpus: 1.0                # CPU cores per pool replica
+    num_cpus: 4.0                # CPU cores per pool replica
     num_gpus: 0.0                # GPU cards per pool replica
     memory: 3384                 # RAM MB per replica (8GB)
     object_store_memory: 4192    # Object store MB per replica (4GB)
@@ -49,7 +49,7 @@ pooled_deployment:
 
   # Auto-scaling cho pool replicas
   autoscaling_config:
-    min_replicas: 1              # Minimum replicas always running
+    min_replicas: 2              # Minimum replicas always running
     max_replicas: 3             # Maximum replicas (scale for load)
     target_num_ongoing_requests_per_replica: 10 # Target concurrent requests
     metrics_interval_s: 5.0      # Metrics collection interval
@@ -59,8 +59,8 @@ pooled_deployment:
 # 5. Tiered Loading - Chiến lược cache thông minh cho models
 tiered_loading:
   enable_tiered_loading: true    # Bật tiered caching system
-  hot_cache_size: 50             # "Hot" models - luôn in memory (most used)
-  warm_cache_size: 100           # "Warm" models - load on demand (frequently used)
+  hot_cache_size: 150             # "Hot" models - luôn in memory (most used)
+  warm_cache_size: 200           # "Warm" models - load on demand (frequently used)
   cold_cache_size: 500           # "Cold" models - lazy load (rarely used)
 
   # Promotion thresholds - nâng cấp models lên tier cao hơn

@@ -11,7 +11,7 @@ from typing import Dict, Optional
 from ..api.api_dependencies import (
     initialize_dependencies,
     update_service_readiness,
-    enable_enhanced_error_handling
+    enable_enhanced_error_handling,
 )
 from ..config.config import Config
 from ..core.model_manager import ModelManager
@@ -50,16 +50,14 @@ class ServiceComponents:
 
             # Check enhanced error handling configuration
             self.enhanced_error_handling_enabled = getattr(
-                config, 'enable_enhanced_error_handling', True
+                config, "enable_enhanced_error_handling", True
             )
 
             # Check if tier-based deployment is enabled
             self.use_tier_based_deployment = hasattr(
                 config, "tier_based_deployment"
             ) and getattr(
-                config.tier_based_deployment,
-                "enable_tier_based_deployment",
-                False
+                config.tier_based_deployment, "enable_tier_based_deployment", False
             )
 
             logger.info(
@@ -132,23 +130,19 @@ class ServiceComponents:
         )
 
     def _initialize_input_handler(self) -> None:
-        """Initialize Input Handler."""
+        """Initialize Input Handler with config parameter."""
         logger.info("Setting up Input Handler...")
         self.input_handler = DataHandler()
 
     def _initialize_deployment_manager(self, config: Config) -> None:
         """Initialize Deployment Manager."""
         logger.info("Setting up Deployment Manager...")
-        self.deployment_manager = PooledModelDeployment(
-            self.model_manager, config
-        )
+        self.deployment_manager = PooledModelDeployment(self.model_manager, config)
 
     def _initialize_tier_orchestrator(self, config: Config) -> None:
         """Initialize Tier-based Deployment Orchestrator."""
         logger.info("Setting up Tier-based Deployment Orchestrator...")
-        self.tier_orchestrator = TierDeploymentOrchestrator(
-            self.model_manager, config
-        )
+        self.tier_orchestrator = TierDeploymentOrchestrator(self.model_manager, config)
 
     def _initialize_fastapi_dependencies(self) -> None:
         """Initialize FastAPI dependencies with enhanced error handling."""
@@ -180,9 +174,7 @@ class ServiceComponents:
                 enable_enhanced_error_handling(True)
                 logger.info("Enhanced error handling enabled successfully")
             except Exception as e:
-                logger.warning(
-                    f"Could not enable enhanced error handling: {e}"
-                )
+                logger.warning(f"Could not enable enhanced error handling: {e}")
                 logger.warning("Continuing with standard error handling")
 
     # Các methods khác giữ nguyên như code gốc...
@@ -263,13 +255,19 @@ class ServiceComponents:
                 if model_info:
                     loaded_count += 1
                     logger.debug(f"Successfully loaded HOT tier model: {model_name}")
-                    
+
                     # CRITICAL FIX: Synchronize TierManager state with ModelManager
                     if self.tier_orchestrator and self.tier_orchestrator.tier_manager:
                         # Update tier manager tracking to reflect that model is loaded and deployed
-                        self.tier_orchestrator.tier_manager.loaded_models.add(model_name)
-                        self.tier_orchestrator.tier_manager.deployed_models.add(model_name)
-                        logger.debug(f"Synchronized TierManager state for HOT model: {model_name}")
+                        self.tier_orchestrator.tier_manager.loaded_models.add(
+                            model_name
+                        )
+                        self.tier_orchestrator.tier_manager.deployed_models.add(
+                            model_name
+                        )
+                        logger.debug(
+                            f"Synchronized TierManager state for HOT model: {model_name}"
+                        )
                 else:
                     failed_count += 1
                     logger.warning(f"Failed to load HOT tier model: {model_name}")
@@ -281,7 +279,9 @@ class ServiceComponents:
         logger.info(
             f"HOT tier model loading completed: {loaded_count} loaded, {failed_count} failed"
         )
-        logger.info(f"TierManager state synchronized for {loaded_count} HOT tier models")
+        logger.info(
+            f"TierManager state synchronized for {loaded_count} HOT tier models"
+        )
         return loaded_count, failed_count
 
     async def _warm_up_tier_deployments(self):
@@ -322,9 +322,7 @@ class ServiceComponents:
             for deployment_name in tier_deployments[:3]:  # Limit to first 3 deployments
                 try:
                     logger.debug(f"Warming up deployment: {deployment_name}")
-                    deployment_handle = serve.get_app_handle(
-                        deployment_name
-                    )
+                    deployment_handle = serve.get_app_handle(deployment_name)
 
                     # Make a warmup request with timeout
                     result_ref = await deployment_handle.remote(warmup_payload)

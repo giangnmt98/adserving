@@ -37,12 +37,8 @@ class RequestContextExtractor:
             for element in data_list:
                 element_info = {
                     "ma_tieu_chi": element.get("ma_tieu_chi", "UNKNOWN"),
-                    "fn_fields": [
-                        k for k in element.keys() if k.startswith("FN")
-                    ],
-                    "fn_count": len([
-                        k for k in element.keys() if k.startswith("FN")
-                    ]),
+                    "fn_fields": [k for k in element.keys() if k.startswith("FN")],
+                    "fn_count": len([k for k in element.keys() if k.startswith("FN")]),
                     "all_fields": list(element.keys()),
                 }
                 context["data_elements"].append(element_info)
@@ -63,8 +59,7 @@ class RequestContextExtractor:
 
     @staticmethod
     def extract_model_name_context(
-            model_name: Optional[str],
-            processed_request: Dict
+        model_name: Optional[str], processed_request: Dict
     ) -> Dict[str, Any]:
         """
         Extract context specific to model name extraction.
@@ -76,15 +71,15 @@ class RequestContextExtractor:
         Returns:
             Dict chứa model name context
         """
-        context = RequestContextExtractor.extract_request_context(
-            processed_request
-        )
+        context = RequestContextExtractor.extract_request_context(processed_request)
 
-        context.update({
-            "extracted_model_name": model_name,
-            "model_name_available": model_name is not None,
-            "extraction_method": "automatic" if model_name else "failed",
-        })
+        context.update(
+            {
+                "extracted_model_name": model_name,
+                "model_name_available": model_name is not None,
+                "extraction_method": "automatic" if model_name else "failed",
+            }
+        )
 
         return context
 
@@ -111,13 +106,15 @@ class RequestContextExtractor:
 
                 if ma_don_vi and ma_bao_cao and ma_tieu_chi:
                     base_pattern = f"{ma_don_vi}_{ma_bao_cao}_{ma_tieu_chi}"
-                    patterns.extend([
-                        f"{base_pattern}_FN{fn_count:02d}",  # FN04
-                        f"{base_pattern}_FN{fn_count}",  # FN4
-                        f"{base_pattern}_{fn_count}F",  # 4F
-                        f"{base_pattern}_fields_{fn_count}",  # fields_4
-                        base_pattern,  # Base without field count
-                    ])
+                    patterns.extend(
+                        [
+                            f"{base_pattern}_FN{fn_count:02d}",  # FN04
+                            f"{base_pattern}_FN{fn_count}",  # FN4
+                            f"{base_pattern}_{fn_count}F",  # 4F
+                            f"{base_pattern}_fields_{fn_count}",  # fields_4
+                            base_pattern,  # Base without field count
+                        ]
+                    )
 
         except Exception:
             patterns = ["Unable to generate patterns - check request format"]
