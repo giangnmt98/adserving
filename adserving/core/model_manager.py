@@ -33,7 +33,7 @@ class ModelManager:
         hot_cache_size: int = 50,
         warm_cache_size: int = 200,
         cold_cache_size: int = 500,
-        update_interval: int = 60,
+        update_interval: int = 10,
         max_workers: int = 8,
         enable_model_warming: bool = True,
     ):
@@ -42,6 +42,7 @@ class ModelManager:
 
         self.mlflow_tracking_uri = mlflow_tracking_uri
         self.update_interval = update_interval
+        print("A$$$$$$$$$$$$$$$$$$$$$$$$$$$$$", self.update_interval)
         self.max_workers = max_workers
         self.enable_model_warming = enable_model_warming
 

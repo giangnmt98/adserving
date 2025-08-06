@@ -205,11 +205,12 @@ monitoring:
 logging:
   log_level: "DEBUG"
   log_dir: "logs"
-  max_file_size: 104857600  # 100MB in bytes
+  max_file_size: 104857600  # 100MB in bytes 
   backup_count: 5
   enable_console: true
   enable_structured: true
   enable_performance_tracking: true
+  format: "[%(asctime)s][%(filename)s:%(lineno)d][%(levelname)s] %(message)s"
 
 # 12. Security Configuration
 security:

@@ -52,6 +52,7 @@ class LoggingConfig:
     enable_console: bool = True
     enable_structured: bool = True
     enable_performance_tracking: bool = True
+    format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     # Logging features
     enable_model_level_logging: bool = True

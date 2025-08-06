@@ -94,62 +94,64 @@ class ModelLoaderService:
             if cached_model and self._is_model_current(cached_model):
                 return cached_model
 
-            # Get latest production version using new MLflow API
+            # Get latest production version
+            latest_version = None
+            anomaly_threshold = 0.0
+
             try:
-                # Try the new alias-based approach first (recommended)
-                use_alias = False
-                try:
-                    latest_version = (
-                        self.model_manager.mlflow_client.get_model_version_by_alias(
-                            model_name, "production"
-                        )
-                    )
-                    use_alias = True
-                except Exception:
-                    # Fallback to search_model_versions for models still
-                    # using stages
-                    versions = self.model_manager.mlflow_client.search_model_versions(
-                        filter_string=f"name='{model_name}'",
-                        order_by=["version_number DESC"],
-                        max_results=1,
-                    )
-                    if not versions:
-                        self.logger.warning(
-                            f"No versions found for model: {model_name}"
-                        )
-                        return None
-                    latest_version = versions[0]
-            except Exception as e:
-                self.logger.warning(
-                    f"Error getting production version for model " f"{model_name}: {e}"
+                mlflow_client = self.model_manager.mlflow_client
+
+                #Lấy ModelVersion object, KHÔNG lấy .version ngay
+                production_versions_list = mlflow_client.client.get_latest_versions(
+                    name=model_name,
+                    stages=["Production"]
                 )
+
+                if not production_versions_list:
+                    self.logger.warning(f"No Production stage version found for model: {model_name}")
+                    return None
+
+                #Lấy ModelVersion object từ list
+                latest_version = production_versions_list[0]
+
+                # Lấy threshold parameters
+                try:
+                    anomaly_threshold = mlflow_client.get_threshold_parameters(model_name)
+                except Exception as e:
+                    self.logger.debug(f"No threshold parameters found for {model_name}: {e}")
+                    anomaly_threshold = {}
+
+            except Exception as e:
+                self.logger.error(f"Error getting production version for model {model_name}: {e}")
                 return None
 
-            # Construct model URI based on the approach used
-            if use_alias:
-                model_uri = f"models:/{model_name}@production"
-            else:
-                model_uri = f"models:/{model_name}/{latest_version.version}"
+            if not latest_version:
+                self.logger.error(f"Could not find any suitable version for model {model_name}")
+                return None
+
+            #ĐÚNG: Construct model URI với version number
+            model_uri = f"models:/{model_name}/{latest_version.version}"
 
             # Load model
             start_time = time.time()
             model = load_model(model_uri)
             load_time = time.time() - start_time
 
-            # Determine tier based on current model count and configuration
+            # Determine tier
             tier = self._determine_model_tier(model_name)
 
-            # Create model info
+            # ĐÚNG: Create model info với version string
             model_info = ModelInfo(
                 model_name=model_name,
                 model_version=latest_version.version,
                 model_uri=model_uri,
+                anomaly_threshold=anomaly_threshold,
                 model=model,
                 loaded_at=time.time(),
                 last_accessed=time.time(),
                 access_count=1,
                 tier=tier,
-                memory_usage=0.0,  # Would be calculated based on model size
+                memory_usage=0.0,
                 avg_inference_time=load_time,
                 error_count=0,
                 success_count=0,
@@ -157,8 +159,6 @@ class ModelLoaderService:
 
             # Cache the model
             self.model_manager.cache.put(model_name, model_info)
-
-            # Record load time for statistics
             self.model_manager.cache.record_load_time(load_time)
 
             self.logger.debug(

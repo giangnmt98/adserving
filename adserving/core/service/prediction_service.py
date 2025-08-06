@@ -32,39 +32,54 @@ class PredictionService:
         self.batch_timeout = 0.1  # 100ms
 
     async def predict(self, model_name: str, input_data: pd.DataFrame) -> Optional[Any]:
-        """Prediction with batch processing and performance tracking"""
+        """Prediction with batch processing and performance tracking
+        
+        Args:
+            model_name: Name of the model to use for prediction
+            input_data: Input data as pandas DataFrame
+            
+        Returns:
+            Optional[Any]: 
+            - 1 if anomaly detected (score > threshold)
+            - 0 if no anomaly detected (score <= threshold)  
+            - None if error occurred
+        """
         try:
-            # Load model if not cached
+            # Get model info from cache AND check if current
             model_info = self.model_manager.cache.get(model_name)
-            if not model_info:
-                model_info = await self.model_manager.model_loader.load_model_async(
-                    model_name
-                )
+            if not model_info or not self.model_manager._is_model_current(model_info):
+                # Load/reload model if not in cache or outdated
+                model_info = await self.model_manager.model_loader.load_model_async(model_name)
                 if not model_info:
                     return None
 
-            # Record prediction attempt
+            # Make prediction and track performance
             start_time = time.time()
-
             try:
-                # Perform prediction
-                result = model_info.model.predict(input_data)
+                # Get anomaly score from model prediction
+                anomaly_score = model_info.model.predict(input_data)
 
-                # Update performance metrics
+                # Calculate inference time
                 inference_time = time.time() - start_time
-                model_info.update_performance(inference_time, True)
 
+                # Update model performance metrics
+                model_info.update_performance(inference_time, True)
+                # Return 1 if anomaly detected (score > threshold), 0 otherwise
+                result = 1 if (anomaly_score is not None and
+                               anomaly_score[0] > model_info.anomaly_threshold) else 0
                 return result
 
             except Exception as e:
-                # Update error metrics
+                # Log prediction error and update error count
                 model_info.update_performance(0, False)
                 self.logger.error(f"Prediction error for {model_name}: {e}")
                 raise
 
         except Exception as e:
+            # Log any other errors
             self.logger.error(f"Error in predict for {model_name}: {e}")
             return None
+        
 
     def get_model_info(self, model_name: str) -> Optional[ModelInfo]:
         """Get model information"""

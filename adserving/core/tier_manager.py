@@ -572,6 +572,7 @@ class TierManager:
         try:
             if hasattr(self, "_model_manager") and self._model_manager:
                 model_info = await self._model_manager.load_model_async(model_name)
+                print(f"Model {model_name} loaded with info: {model_info}")
                 if model_info:
                     self.loaded_models.add(model_name)
                     logger.info(f"Loaded model {model_name} (no deployment created)")

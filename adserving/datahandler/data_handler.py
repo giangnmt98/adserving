@@ -152,7 +152,7 @@ class DataHandler:
             )
 
         results_list = result["results"]
-        self.logger.info(
+        self.logger.debug(
             f"Processing results_list with {len(results_list)} items: {results_list}"
         )
 

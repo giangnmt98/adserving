@@ -1,3 +1,4 @@
+
 """
 Core Service Endpoints (Health, Readiness, Service Info)
 """
@@ -52,58 +53,69 @@ async def service_info(
             models_loaded=models_loaded,
             endpoints={
                 # Core Service Endpoints
-                "service_info": "/",
-                "health_check": "/health",
-                "readiness_check": "/ready",
+                "service_info": "GET /",
+                "health_check": "GET /health",
+                "readiness_check": "GET /ready",
+                
                 # Prediction Endpoints
-                "predict": "/predict",
-                "prediction_health_check": "/predict/health",
-                # Model Management Endpoints
-                "model_stats": "/models/stats",
-                "model_info": "/models/{model_name}/info",
-                "deployment_stats": "/models/deployment-stats",
-                # Tier Management Endpoints
-                "set_manual_tier_assignment": "POST /tier/manual-assignment",
-                "remove_manual_tier_assignment": "DELETE /tier"
-                "/manual-assignment/{model_name}",
-                "get_manual_tier_assignment": "GET /tier/"
-                "manual-assignment/{model_name}",
-                "get_business_critical_models": "GET /tier/" "business-critical-models",
-                "add_business_critical_pattern": "POST /tier/"
-                "business-critical-pattern",
-                "remove_business_critical_pattern": "DELETE /tier"
-                "/business-critical-pattern/{pattern_id}",
-                "bulk_assign_business_critical_models": "POST /tier/"
-                "bulk-assign-business-critical",
-                # Monitoring & Metrics Endpoints
-                "routing_stats": "/routing/stats",
-                "cache_stats": "/cache/stats",
-                "dashboard_data": "/dashboard",
-                "prometheus_metrics": "/metrics",
-                # MLflow Integration Endpoints (if enabled)
-                "mlflow_endpoint": "/deployments/{endpoint_name}",
+                "predict": "POST /predict",
+                
+                # Model Management Endpoints (từ model_endpoints.py)
+                "model_stats": "GET /models/stats",
+                "model_info": "GET /models/{model_name}/info",
+                "cache_stats": "GET /cache/stats",
+                "routing_stats": "GET /routing/stats",
+                "deployment_stats": "GET /models/deployment-stats",
+                "dashboard_data": "GET /dashboard",
+                "prometheus_metrics": "GET /metrics",
+                
+                # Parameter Management Endpoints (mới bổ sung)
+                "production_models": "GET /models/production",
+                "model_parameters": "GET /models/{model_name}/parameters",
+                "validate_parameters": "POST /models/{model_name}/parameters/validate",
+                "update_threshold": "PUT /models/{model_name}/threshold",
+                "update_parameters": "PUT /models/{model_name}/parameters",
+                "rollback_model": "POST /models/{model_name}/rollback",
+                "parameter_history": "GET /models/{model_name}/history",
+                "batch_threshold_update": "POST /models/batch-threshold-update",
+                "warm_model": "POST /models/{model_name}/warm",
+                "evict_model": "DELETE /models/{model_name}/cache",
+                
+                # Tier Management Endpoints (từ tier_management_endpoints.py)
+                "manual_tier_assignment": "POST /tier/manual-assignment",
+                "remove_tier_assignment": "DELETE /tier/manual-assignment/{model_name}",
+                "get_tier_assignment": "GET /tier/manual-assignment/{model_name}",
+                "business_critical_models": "GET /tier/business-critical-models",
+                "add_critical_pattern": "POST /tier/business-critical-pattern",
+                "remove_critical_pattern": "DELETE /tier/business-critical-pattern/{pattern_id}",
+                "bulk_assign_critical": "POST /tier/bulk-assign-business-critical",
+                
                 # System Endpoints
-                "api_documentation": "/docs",
-                "openapi_schema": "/openapi.json",
+                "api_documentation": "GET /docs",
+                "openapi_schema": "GET /openapi.json",
+                "redoc_documentation": "GET /redoc",
             },
             timestamp=datetime.now().isoformat(),
             description=(
-                "Anomaly Detection serving system for hundreds of models "
-                "with tiered loading and intelligent routing"
+                "Enhanced Anomaly Detection serving system for hundreds of models "
+                "with tiered loading, parameter management, and intelligent routing"
             ),
             features=[
                 "Tiered model loading (Hot/Warm/Cold)",
-                "Single endpoint routing with intelligent selection",
-                "Batch processing capabilities",
+                "Single endpoint routing with intelligent selection", 
+                "Real-time parameter updates via API",
+                "Model version rollback capabilities",
+                "Batch parameter operations",
                 "Advanced monitoring and metrics",
-                "Resource sharing and GPU optimization",
-                "Prometheus metrics export",
-                "Auto-scaling and capacity planning",
-                "Zero-downtime deployment",
-                "Business-critical model management",
-                "MLflow integration",
+                "Model cache management (warm/evict)",
+                "Business-critical model prioritization",
+                "Manual tier assignment support",
                 "Comprehensive health checks",
-                "Real-time dashboard monitoring",
+                "Zero-downtime deployment",
+                "Prometheus metrics export",
+                "Interactive API documentation",
+                "Parameter validation before updates",
+                "Audit trail for parameter changes",
             ],
         )
     except Exception as e:

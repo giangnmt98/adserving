@@ -45,45 +45,6 @@ class SimpleAnomalyDetectionModel:
 
         return features.fillna(0)
 
-    def _calculate_optimal_threshold(self, model, features_scaled, contamination=0.1):
-        """Tính toán threshold tối ưu dựa trên decision function scores"""
-        try:
-            # Lấy decision function scores
-            decision_scores = model.decision_function(features_scaled)
-
-            # Tính threshold dựa trên contamination level
-            # Scores càng thấp càng có khả năng là anomaly
-            threshold_percentile = contamination * 100
-            optimal_threshold = np.percentile(decision_scores, threshold_percentile)
-
-            # Tính additional metrics
-            predictions = model.predict(features_scaled)
-            anomaly_rate = np.sum(predictions == -1) / len(predictions)
-
-            # Tính probability threshold (cho probability-based predictions)
-            # Chuyển đổi decision scores thành probabilities
-            probabilities = 1 / (1 + np.exp(decision_scores * 2))  # Scaled sigmoid
-            prob_threshold = np.percentile(probabilities, (1 - contamination) * 100)
-
-            return {
-                'optimal_decision_threshold': float(optimal_threshold),
-                'probability_threshold': float(prob_threshold),
-                'actual_anomaly_rate': float(anomaly_rate),
-                'min_decision_score': float(np.min(decision_scores)),
-                'max_decision_score': float(np.max(decision_scores)),
-                'decision_score_std': float(np.std(decision_scores))
-            }
-        except Exception as e:
-            print(f" Lỗi khi tính threshold: {e}")
-            return {
-                'optimal_decision_threshold': -0.1,
-                'probability_threshold': 0.6,
-                'actual_anomaly_rate': contamination,
-                'min_decision_score': -1.0,
-                'max_decision_score': 1.0,
-                'decision_score_std': 0.5
-            }
-
     def train_and_save_model(self, data, ma_don_vi, ma_bao_cao, ma_tieu_chi, fld_code, is_clone=False,
                              original_ma_tieu_chi=None):
         """Train model và save vào MLflow với metadata đầy đủ"""
@@ -124,29 +85,14 @@ class SimpleAnomalyDetectionModel:
         )
         iso_forest.fit(features_scaled)
 
-        # Tính toán thresholds tối ưu
-        threshold_info = self._calculate_optimal_threshold(iso_forest, features_scaled, contamination)
-
         # Tạo wrapper model với cả predict và predict_proba
         class AnomalyDetectionWrapper:
-            def __init__(self, model, scaler, threshold_info):
+            def __init__(self, model, scaler):
                 self.model = model
                 self.scaler = scaler
-                self.threshold_info = threshold_info
                 self.supports_probability = True
-                self.output_type = "probability"  # Mặc định trả về probability
 
             def predict(self, X):
-                """Trả về nhãn: True (anomaly) hoặc False (normal)"""
-                if isinstance(X, pd.DataFrame) and 'gia_tri' in X.columns:
-                    features = self._prepare_features(X)
-                    features_scaled = self.scaler.transform(features)
-                    predictions = self.model.predict(features_scaled)
-                    return predictions == -1
-                else:
-                    raise ValueError("Input phải là DataFrame với cột 'gia_tri'")
-
-            def predict_proba(self, X):
                 """Trả về probability scores (anomaly probabilities)"""
                 if isinstance(X, pd.DataFrame) and 'gia_tri' in X.columns:
                     features = self._prepare_features(X)
@@ -155,20 +101,7 @@ class SimpleAnomalyDetectionModel:
                     # Lấy decision function scores
                     decision_scores = self.model.decision_function(features_scaled)
 
-                    # Chuyển đổi thành probabilities (0-1)
-                    # Scores càng thấp thì probability càng cao
-                    probabilities = 1 / (1 + np.exp(decision_scores * 2))
-
-                    return probabilities
-                else:
-                    raise ValueError("Input phải là DataFrame với cột 'gia_tri'")
-
-            def decision_function(self, X):
-                """Trả về raw decision scores"""
-                if isinstance(X, pd.DataFrame) and 'gia_tri' in X.columns:
-                    features = self._prepare_features(X)
-                    features_scaled = self.scaler.transform(features)
-                    return self.model.decision_function(features_scaled)
+                    return decision_scores
                 else:
                     raise ValueError("Input phải là DataFrame với cột 'gia_tri'")
 
@@ -186,43 +119,20 @@ class SimpleAnomalyDetectionModel:
                 features['z_score'] = np.abs((data['gia_tri'] - overall_mean) / data['gia_tri'].std())
                 return features.fillna(0)
 
-        wrapped_model = AnomalyDetectionWrapper(iso_forest, scaler, threshold_info)
-
-        # Xác định output type
-        has_predict_proba = hasattr(wrapped_model, 'predict_proba') and callable(
-            getattr(wrapped_model, 'predict_proba'))
-        has_decision_function = hasattr(wrapped_model, 'decision_function') and callable(
-            getattr(wrapped_model, 'decision_function'))
-
-        if has_predict_proba:
-            output_type = "probability"
-            threshold = threshold_info['probability_threshold']
-        else:
-            output_type = "label"
-            threshold = 0.0
-
-        # Tính toán training metrics
-        training_predictions = iso_forest.predict(features_scaled)
-        training_anomalies = np.sum(training_predictions == -1)
-        training_normal = np.sum(training_predictions == 1)
+        wrapped_model = AnomalyDetectionWrapper(iso_forest, scaler)
 
         # Log model vào MLflow với metadata chi tiết
         run_name = f"clone_{model_name}" if is_clone else f"train_{model_name}"
         with mlflow.start_run(run_name=run_name):
             # Log basic parameters
             mlflow.log_param("model_name", model_name)
-            mlflow.log_param("algorithm", "isolation_forest")
-            mlflow.log_param("training_samples", len(filtered_data))
-            mlflow.log_param("contamination", contamination)
-            mlflow.log_param("n_estimators", n_estimators)
-            mlflow.log_param("random_state", random_state)
 
             # Log data info
             mlflow.log_param("ma_don_vi", ma_don_vi)
             mlflow.log_param("ma_bao_cao", ma_bao_cao)
             mlflow.log_param("ma_tieu_chi", ma_tieu_chi)
             mlflow.log_param("fld_code", fld_code)
-
+            mlflow.log_param("anomaly_threshold", 0.5)
             # Log clone information
             if is_clone:
                 mlflow.log_param("is_clone", True)
@@ -234,28 +144,13 @@ class SimpleAnomalyDetectionModel:
             mlflow.log_param("data_date_range",
                              f"{filtered_data['ky_du_lieu'].min()} to {filtered_data['ky_du_lieu'].max()}")
 
-            # Log output type và thresholds
-            mlflow.log_param("output_type", output_type)
-            mlflow.log_param("threshold", threshold)
-            mlflow.log_param("supports_probability", has_predict_proba)
-            mlflow.log_param("supports_decision_function", has_decision_function)
-
-            # Log threshold information
-            for key, value in threshold_info.items():
-                mlflow.log_param(key, value)
-
             # Log model metadata
             model_metadata = {
-                "output_type": output_type,
-                "threshold": threshold,
-                "supports_probability": has_predict_proba,
-                "supports_decision_function": has_decision_function,
                 "algorithm": "isolation_forest",
                 "contamination": contamination,
                 "training_samples": len(filtered_data),
                 "feature_count": len(features.columns),
                 "is_clone": is_clone,
-                **threshold_info
             }
 
             if is_clone:
@@ -264,7 +159,6 @@ class SimpleAnomalyDetectionModel:
             # Set tags
             mlflow.set_tag("model_type", "anomaly_detection")
             mlflow.set_tag("algorithm", "isolation_forest")
-            mlflow.set_tag("output_type", output_type)
             mlflow.set_tag("version", "1.0")
             mlflow.set_tag("created_by", "SimpleAnomalyDetectionModel")
 
@@ -279,9 +173,8 @@ class SimpleAnomalyDetectionModel:
                 registered_model_name=model_name,
                 metadata=model_metadata
             )
-
             run_id = mlflow.active_run().info.run_id
-            print(f"    MLflow run ID: {run_id}")
+            print(f"MLflow run ID: {run_id}")
 
         # Chờ một chút để MLflow hoàn thành việc register
         time.sleep(2)
@@ -292,23 +185,31 @@ class SimpleAnomalyDetectionModel:
             latest_versions = client.get_latest_versions(model_name, stages=["None"])
 
             if latest_versions:
-                version = latest_versions[0].version
+                new_version = latest_versions[0].version
+
+                # Archive tất cả các version khác
+                all_versions = client.search_model_versions(f"name='{model_name}'")
+                for v in all_versions:
+                    if v.version != new_version and v.current_stage != "Archived":
+                        client.transition_model_version_stage(
+                            name=model_name,
+                            version=v.version,
+                            stage="Archived"
+                        )
+                        print(f" - Archived old version v{v.version}")
+
+                # Chuyển version mới sang Production
                 client.transition_model_version_stage(
                     name=model_name,
-                    version=version,
+                    version=new_version,
                     stage="Production"
                 )
-                print(f" Model {model_name} v{version} đã được chuyển sang Production")
-                print(f"    Output type: {output_type}")
-                print(f"    Threshold: {threshold:.4f}")
-                if has_predict_proba:
-                    print(f"    Probability threshold: {threshold_info['probability_threshold']:.4f}")
-                print(f"    Optimal decision threshold: {threshold_info['optimal_decision_threshold']:.4f}")
-                print(f"    Training anomaly rate: {threshold_info['actual_anomaly_rate']:.3f}")
+                print(f"Model {model_name} v{new_version} đã được chuyển sang Production duy nhất")
+
                 if is_clone:
-                    print(f"    Clone từ ma_tieu_chi gốc: {original_ma_tieu_chi}")
+                    print(f"Clone từ ma_tieu_chi gốc: {original_ma_tieu_chi}")
             else:
-                print(f" Không tìm thấy version cho model {model_name}")
+                print(f"Không tìm thấy version cho model {model_name}")
 
         except Exception as e:
             print(f" Lỗi khi chuyển model sang Production: {e}")

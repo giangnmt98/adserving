@@ -16,9 +16,9 @@ class ModelMonitoringService:
     def __init__(
         self,
         model_manager,
-        update_interval: int = 60,
+        update_interval: int = 10,
         enable_model_warming: bool = True,
-        production_check_interval: int = 60,
+        production_check_interval: int = 10,
     ):
         self.model_manager = model_manager
         self.update_interval = update_interval

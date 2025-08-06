@@ -18,6 +18,7 @@ class ModelInfo:
 
     model_name: str
     model_version: str
+    anomaly_threshold: float
     model_uri: str
     model: Any
     loaded_at: float
