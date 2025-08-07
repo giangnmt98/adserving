@@ -79,6 +79,7 @@ class SimpleAnomalyDetectionModel:
         with mlflow.start_run(run_name=f"train_{model_name}"):
             mlflow.log_param("model_name", model_name)
             mlflow.log_param("training_samples", num_samples)
+            mlflow.log_param("anomaly_threshold", 0.0000001)
             mlflow.sklearn.log_model(
                 sk_model=wrapped_model,
                 artifact_path="model",
@@ -112,9 +113,9 @@ def train_and_register_single_task(sub_data, row, i):
 
 
 if __name__ == "__main__":
-    N = 50
-    MAX_WORKERS = 16
-    data_path = "./data/bao_cao_dulieu_not_none.csv"
+    N = 60
+    MAX_WORKERS = 20
+    data_path = "bao_cao_dulieu_not_none.csv"
     data = pd.read_csv(data_path)
     data['ky_du_lieu'] = pd.to_datetime(data['ky_du_lieu'])
 
@@ -132,7 +133,7 @@ if __name__ == "__main__":
             tasks.append((sub_data.copy(), row, i))
 
     results = []
-    print(f"⚙️ Running {len(tasks)} model clones in parallel...")
+    print(f"Running {len(tasks)} model clones in parallel...")
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_cfg = {

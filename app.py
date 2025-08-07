@@ -3,22 +3,16 @@ Main FastAPI application entry point
 Enhanced with request body capture middleware for better validation error handling
 """
 
-import logging
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.exceptions import HTTPException
+from adserving.src.utils.logger import get_logger
 
 # Configure basic logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 @asynccontextmanager
@@ -47,14 +41,12 @@ def create_app(api_prefix: str = "") -> FastAPI:
 
     try:
         # Import required modules
-        from adserving.config.config import get_config
-        from adserving.api import exception_handlers
-        from adserving.api import (
-            core_endpoints,
-            prediction_endpoint,
-            model_endpoints,
-            tier_management_endpoints
-        )
+        from adserving.src.config.config_manager import get_config
+        from adserving.src.api import exception_handlers
+        from adserving.src.api import prediction_endpoint
+        from adserving.src.api import model_endpoints
+        from adserving.src.api import core_endpoints
+        from adserving.src.api import tier_management_endpoints
 
         # Get application configuration
         config = get_config()
@@ -134,7 +126,7 @@ def main() -> None:
             sys.exit(1)
 
         # Import and run service using the main service module
-        from adserving.service.main_service import AnomalyDetectionServe
+        from adserving.src.service import AnomalyDetectionServe
 
         # Create service instance
         service = AnomalyDetectionServe()

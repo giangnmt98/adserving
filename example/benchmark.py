@@ -9,11 +9,11 @@ from datetime import datetime
 from statistics import mean, median, stdev
 
 API_URL = "http://localhost:8000/api/v1/predict"
-JSON_PATH = "./generated_model_names.json"
+JSON_PATH = "generated_model_names.json"
 
 # Benchmark config
-CONCURRENT_USERS = 50
-BENCHMARK_DURATION_SECONDS = 60
+CONCURRENT_USERS = 10
+BENCHMARK_DURATION_SECONDS = 20
 SCENARIOS = {
     # Tải đồng đều: Phân bố ngẫu nhiên từ 10-90% để mô phỏng tải bình thường trong ngày
     "uniform": lambda: round(random.uniform(10, 90), 2),
@@ -132,10 +132,3 @@ async def run_combined_benchmark(scenario_name, scenario_func):
 if __name__ == "__main__":
     for name, func in SCENARIOS.items():
         asyncio.run(run_combined_benchmark(name, func))
-
-
-data=[
-    {'ma_tieu_chi': 'CT_TONGCONG',
-     'FN01': 1.23, 'FN02': 45.6, 'FN03': 22, 'FN4': 23, '_validation_errors': []},
-    {'ma_tieu_chi': 'CT_UBND.0019', 'FN01': 11.23, 'FN02': 15.6, 'FN03': 12, 'FN4': None,
-     '_validation_errors': [{'ma_tieu_chi': 'CT_UBND.0019', 'fld_code': 'FN4', 'error_message': 'data không hợp lệ', 'detail': 'Trường FN4 phải là kiểu số (number), nhận được kiểu NoneType'}]}]

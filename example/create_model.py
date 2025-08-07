@@ -2,10 +2,8 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, confusion_matrix
 import mlflow
 import mlflow.sklearn
-from datetime import datetime
 import warnings
 import time
 import random
