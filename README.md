@@ -1,32 +1,35 @@
-# MLOps Serve
+# Anomaly Detection Serve
 
-Một hệ thống MLOps hoàn chỉnh sử dụng Ray Serve và MLflow để triển khai và phục vụ nhiều mô hình machine learning song song với khả năng zero-downtime deployment, auto-scaling, và monitoring toàn diện.
+A comprehensive anomaly detection system using Ray Serve and MLflow to deploy and serve multiple machine learning models with ultra-scale deployment capabilities, zero-downtime deployment, auto-scaling, and comprehensive monitoring.
 
-## 🚀 Tính năng chính
+## Key Features
 
-### Quản lý mô hình (Model Management)
-- **MLflow Model Registry Integration**: Tự động quản lý mô hình có trạng thái "Production"
-- **Zero-downtime Deployment**: Cập nhật mô hình mà không gián đoạn service
-- **Model Caching**: Cache thông minh với LRU eviction
-- **Automatic Model Updates**: Tự động phát hiện và load mô hình mới
+### Ultra-Scale Model Management
+- **2000+ Model Capacity**: Deploy and serve thousands of models simultaneously
+- **MLflow Model Registry Integration**: Automatic management of "Production" status models
+- **Zero-downtime Deployment**: Blue-green deployment strategy for seamless updates
+- **Intelligent Tier Management**: Hot/Warm/Cold model storage tiers for optimal performance
+- **Automatic Model Updates**: Detect and load new models automatically
 
-### Ray Serve Deployment
-- **Parallel Model Serving**: Deploy nhiều mô hình song song
-- **Auto-scaling**: Tự động điều chỉnh số lượng replicas theo tải
-- **Resource Management**: Quản lý tài nguyên CPU/GPU hiệu quả
-- **Health Monitoring**: Kiểm tra sức khỏe mô hình liên tục
+### Advanced Deployment System
+- **Blue-Green Orchestration**: Zero-downtime environment switching
+- **Ultra-Scale Deployment Manager**: Handles 2000+ models with parallel processing
+- **Service Discovery**: Intelligent load balancing and service registration
+- **Health Monitoring**: Comprehensive system and model health checks
+- **Graceful Shutdown**: Proper resource cleanup and request draining
 
-### Monitoring & Performance
-- **Real-time Monitoring**: Giám sát tài nguyên và hiệu suất real-time
-- **Performance Optimization**: Tối ưu batch size và scaling
-- **System Health Score**: Đánh giá tổng thể sức khỏe hệ thống
-- **Detailed Metrics**: Thu thập metrics chi tiết cho debugging
+### Ray Serve Integration
+- **Parallel Model Serving**: Deploy multiple models in parallel
+- **Auto-scaling**: Automatic replica adjustment based on load
+- **Resource Management**: Efficient CPU/GPU resource utilization
+- **Request Routing**: Intelligent request routing to optimal model instances
 
-### Logging & Debugging
-- **Structured Logging**: JSON logging với metadata đầy đủ
-- **Performance Tracking**: Theo dõi thời gian xử lý từng operation
-- **Error Handling**: Xử lý lỗi toàn diện với context
-- **Debug Utilities**: Công cụ debugging và troubleshooting
+### Monitoring & Observability
+- **Real-time Monitoring**: Resource and performance monitoring
+- **Metrics Collection**: System, deployment, and model metrics
+- **Alerting System**: Configurable alerts with multiple severity levels
+- **Performance Analytics**: Deployment success rates and timing analysis
+- **Prometheus Integration**: Export metrics in Prometheus format
 
 ## 📋 Yêu cầu hệ thống
 
@@ -62,35 +65,57 @@ cp config.yaml my_config.yaml
 # Chỉnh sửa my_config.yaml theo nhu cầu
 ```
 
-## 🚀 Sử dụng
+## Usage
 
-### Khởi động server
+### Starting the Server
 
 ```bash
-# Sử dụng cấu hình mặc định
-python -m mlops_serve.mlops_server
+# Start with default configuration
+python app.py
 
-# Sử dụng file cấu hình tùy chỉnh
-python -m mlops_serve.mlops_server --config my_config.yaml
+# Start in production mode
+python app.py --production
 
-# Chỉ định host và port
-python -m mlops_serve.mlops_server --host 0.0.0.0 --port 8080
+# Start with custom host and port
+MLOPS_HOST=0.0.0.0 MLOPS_PORT=8080 python app.py
+
+# Start with debug logging
+python app.py --debug
 ```
 
-### Sử dụng trong code
+### Using the Service Module
 
 ```python
-from mlops_serve import MLOpsServer, Config
+from adserving.src.service import AnomalyDetectionServe
 
-# Tạo server với cấu hình mặc định
-server = MLOpsServer()
+# Create service instance
+service = AnomalyDetectionServe()
 
-# Hoặc với cấu hình tùy chỉnh
-config = Config.from_file("my_config.yaml")
-server = MLOpsServer(config)
+# Run the service (will use config.yaml)
+service.run()
+```
 
-# Chạy server
-server.run()
+### Configuration
+
+The system uses `config.yaml` for configuration. Key settings include:
+
+```yaml
+# API Configuration
+api_host: "0.0.0.0"
+api_port: 8000
+
+# Ray Cluster Configuration
+ray:
+  num_cpus: 20
+  object_store_memory: 8000
+  
+# MLflow Integration
+mlflow:
+  tracking_uri: "http://localhost:5000"
+
+# Ultra-scale deployment settings
+max_workers: 10
+enable_auto_deployment: true
 ```
 
 ## 📚 API Documentation

@@ -12,7 +12,6 @@ import uvicorn
 
 from ..config.config import Config, create_sample_config
 from .service_components import ServiceComponents
-from .existing_warmup_integration import ExistingWarmupIntegration
 from adserving.src.utils.logger import get_logger
 
 logger = get_logger()
@@ -26,7 +25,6 @@ class AnomalyDetectionServe:
         # Initialize config as None first
         self.config: Optional[Config] = None
         self.components = ServiceComponents()
-        self.warmup_integration: Optional[ExistingWarmupIntegration] = None
 
         # Service settings - defaults that will be updated from config
         self.host = "0.0.0.0"
@@ -98,15 +96,6 @@ class AnomalyDetectionServe:
             if not self.config:
                 raise RuntimeError("Configuration not loaded")
 
-            # 3. Configure existing warmup mechanisms AFTER config is loaded
-            logger.info("Configuring warmup mechanisms...")
-            self.warmup_integration = ExistingWarmupIntegration(self.config)
-            self.warmup_integration.ensure_warmup_enabled()
-
-            # 4. Log warmup status
-            warmup_status = self.warmup_integration.get_warmup_status()
-            logger.info(f"Warmup mechanisms active: {warmup_status}")
-
             # 5. Initialize all services
             logger.info("Initializing services...")
             self.components.initialize_all(self.config)
@@ -115,7 +104,38 @@ class AnomalyDetectionServe:
             logger.info("Deploying production models...")
             import asyncio
 
-            model_stats = asyncio.run(self.components.deploy_production_models())
+            # Use asyncio.new_event_loop() to avoid conflict with existing event loops
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If loop is running, create a new one in a thread
+                    import concurrent.futures
+                    import threading
+                    
+                    def run_deployment():
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            return new_loop.run_until_complete(self.components.deploy_production_models())
+                        finally:
+                            new_loop.close()
+                    
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(run_deployment)
+                        model_stats = future.result()
+                else:
+                    model_stats = asyncio.run(self.components.deploy_production_models())
+            except RuntimeError as e:
+                if "asyncio.run() cannot be called from a running event loop" in str(e):
+                    # Create new event loop to avoid conflict
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        model_stats = new_loop.run_until_complete(self.components.deploy_production_models())
+                    finally:
+                        new_loop.close()
+                else:
+                    raise
             self._loaded_model_count = model_stats["loaded"]
             self._failed_model_count = model_stats["failed"]
 

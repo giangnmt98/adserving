@@ -231,7 +231,7 @@ def clone_models_interactive():
     # Đọc dữ liệu
     print(" Đang đọc dữ liệu...")
     try:
-        data = pd.read_csv('./data/bao_cao_dulieu_not_none.csv')
+        data = pd.read_csv('bao_cao_dulieu_not_none.csv')
         data['ky_du_lieu'] = pd.to_datetime(data['ky_du_lieu'])
         print(f" Đã đọc {len(data)} dòng dữ liệu")
     except FileNotFoundError:
@@ -432,7 +432,7 @@ def train_and_save_all_models():
     # Đọc dữ liệu
     print(" Đang đọc dữ liệu...")
     try:
-        data = pd.read_csv('./data/bao_cao_dulieu_not_none.csv')
+        data = pd.read_csv('bao_cao_dulieu_not_none.csv')
         data['ky_du_lieu'] = pd.to_datetime(data['ky_du_lieu'])
         print(f" Đã đọc {len(data)} dòng dữ liệu")
         print(f" Khoảng thời gian: {data['ky_du_lieu'].min()} đến {data['ky_du_lieu'].max()}")

@@ -219,7 +219,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     error_details = str(exc)
 
     # Log the full exception for debugging
-    logger.error(f"Unexpected error for request {request_id}: {exc}", exc_info=True)
+    logger.error(f"Unexpected error for request {request_id}: {exc}")
 
     return create_standardized_error_response(
         error_code="INTERNAL_ERROR",

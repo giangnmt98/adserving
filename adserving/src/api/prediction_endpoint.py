@@ -13,13 +13,15 @@ from ray import serve
 from adserving.src.datahandler.data_handler import DataHandler
 from adserving.src.datahandler.models import APIResponse, PredictionRequest
 from adserving.src.monitoring.model_monitor import ModelMonitor
-from adserving.src.router.model_name_extractor import ModelNameExtractor
 from adserving.src.utils.logger import get_logger
 from .api_dependencies import (
     get_input_handler,
     get_monitor,
-    get_tier_orchestrator,
+    get_model_manager,
+    get_ray_deployment_manager,
 )
+from .prediction_utils import extract_detailed_model_info
+from .prediction_handlers import handle_direct_model_prediction
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic.type_adapter")
 
@@ -28,28 +30,6 @@ logger = get_logger()
 router = APIRouter()
 
 
-def _extract_detailed_model_info(request_data: Dict) -> Dict:
-    """Extract detailed information for model identification"""
-    info = {
-        "ma_don_vi": request_data.get("ma_don_vi", "UNKNOWN"),
-        "ma_bao_cao": request_data.get("ma_bao_cao", "UNKNOWN"),
-        "ky_du_lieu": request_data.get("ky_du_lieu", "UNKNOWN"),
-        "data_elements": [],
-    }
-
-    data_list = request_data.get("data", [])
-    for element in data_list:
-        element_info = {
-            "ma_tieu_chi": element.get("ma_tieu_chi", "UNKNOWN"),
-            "fn_fields": [k for k in element.keys() if k.startswith("FN")],
-            "fn_count": len([k for k in element.keys() if k.startswith("FN")]),
-        }
-        info["data_elements"].append(element_info)
-
-    info["total_elements"] = len(data_list)
-    info["is_single_element"] = len(data_list) == 1
-
-    return info
 
 
 @router.post("/predict", response_model=APIResponse)
@@ -57,6 +37,8 @@ async def predict(
     request: PredictionRequest,
     handler: DataHandler = Depends(get_input_handler),
     monitor: ModelMonitor = Depends(get_monitor),
+    model_manager = Depends(get_model_manager),
+    ray_deployment_manager = Depends(get_ray_deployment_manager),
 ):
     """
     Enhanced prediction endpoint with single element error handling.
@@ -87,7 +69,7 @@ async def predict(
 
     # Extract request info for detailed error handling
     request_dict = request.model_dump() if hasattr(request, "dict") else request
-    model_info = _extract_detailed_model_info(request_dict)
+    model_info = extract_detailed_model_info(request_dict)
     logger.info(
         f"Processing prediction request {request_id}: "
         f"{model_info['total_elements']} elements, "
@@ -97,9 +79,9 @@ async def predict(
     try:
         # Process and validate input
         processed_request = await handler.process_request(request)
-        # Handle tier-based deployment
-        result = await _handle_tier_based_prediction(
-            processed_request, request_id, start_time, model_info
+        # Handle direct model prediction using pre-deployed models
+        result = await handle_direct_model_prediction(
+            processed_request, request_id, start_time, model_info, model_manager, ray_deployment_manager
         )
         model_name = result.get("model_name", "unknown")
 
@@ -143,28 +125,7 @@ async def predict(
         raise
 
 
-async def _handle_tier_based_prediction(
-    processed_request: Dict, request_id: str, start_time: float, model_info: Dict
-) -> Dict:
-    """Handle tier-based prediction with enhanced error context"""
-    orchestrator = get_tier_orchestrator()
 
-    # Extract model name with context
-    extractor = ModelNameExtractor()
-    model_name = extractor.extract_model_name(processed_request)
 
-    # Route request with lazy loading support
-    deployment_name = await orchestrator.route_request(model_name, processed_request)
 
-    deployment_handle = serve.get_app_handle(deployment_name)
-    processed_request["request_id"] = request_id
-    result = await deployment_handle.remote(processed_request)
 
-    # Record metrics for tier management
-    inference_time = time.time() - start_time
-    success = result.get("status") == "success"
-    orchestrator.record_request_metrics(
-        model_name, deployment_name, inference_time, not success
-    )
-
-    return result

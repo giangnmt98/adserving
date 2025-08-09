@@ -113,7 +113,7 @@ def train_and_register_single_task(sub_data, row, i):
 
 
 if __name__ == "__main__":
-    N = 60
+    N = 20
     MAX_WORKERS = 20
     data_path = "bao_cao_dulieu_not_none.csv"
     data = pd.read_csv(data_path)

@@ -15,13 +15,12 @@ from .base_types import ModelTier, ResourceSharingStrategy, RoutingStrategy
 from .core_configs import (
     AnomalyDetectionConfig,
     MLflowConfig,
-    PooledDeploymentSettings,
     RayConfig,
     ResourceSharingConfig,
     RoutingConfig,
     TieredLoadingConfig,
+    WorkerConfig,
 )
-from .deployment_types import AutoscalingSettings, PooledResourceConfig
 from .system_configs import (
     BatchProcessingConfig,
     ConnectionPoolingConfig,
@@ -49,13 +48,13 @@ class Config:
     resource_sharing: ResourceSharingConfig = field(
         default_factory=ResourceSharingConfig
     )
-    pooled_deployment: PooledDeploymentSettings = field(
-        default_factory=PooledDeploymentSettings
-    )
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     anomaly_detection: AnomalyDetectionConfig = field(
         default_factory=AnomalyDetectionConfig
     )
+
+    # Worker configuration for optimal deployment management
+    worker_config: WorkerConfig = field(default_factory=WorkerConfig)
 
     # Performance configurations
     batch_processing: BatchProcessingConfig = field(
@@ -158,14 +157,6 @@ class Config:
         if self.tiered_loading.warm_cache_size <= 0:
             raise ValueError("Warm cache size must be positive")
 
-        # Validate resource settings
-        if self.pooled_deployment.pool_resource_config.num_cpus <= 0:
-            raise ValueError("CPU count must be positive")
-
-        # Validate autoscaling settings
-        autoscaling = self.pooled_deployment.autoscaling_config
-        if autoscaling.min_replicas > autoscaling.max_replicas:
-            raise ValueError("Min replicas cannot exceed max replicas")
 
         # Validate monitoring thresholds
         for threshold_name, value in self.monitoring.alert_thresholds.items():
@@ -210,8 +201,7 @@ class Config:
                 "tiered_loading": cls._handle_tiered_loading_config,
                 "tier_based_deployment": cls._handle_tier_based_deployment_config,
                 "resource_sharing": cls._handle_resource_sharing_config,
-                "pooled_deployment": cls._handle_pooled_deployment_config,
-                "deployment": cls._handle_legacy_deployment_config,
+                "worker_config": cls._handle_worker_config,
                 "routing": cls._handle_routing_config,
                 "monitoring": cls._handle_monitoring_config,
                 "logging": cls._handle_logging_config,
@@ -349,45 +339,7 @@ class Config:
                 value["strategy"] = ResourceSharingStrategy.GPU_SHARED
         return {"resource_sharing": ResourceSharingConfig(**value)}
 
-    @classmethod
-    def _handle_pooled_deployment_config(cls, value: Dict) -> Dict:
-        if "pool_resource_config" in value:
-            value["pool_resource_config"] = PooledResourceConfig(
-                **value["pool_resource_config"]
-            )
-        if "autoscaling_config" in value:
-            value["autoscaling_config"] = AutoscalingSettings(
-                **value["autoscaling_config"]
-            )
-        return {"pooled_deployment": PooledDeploymentSettings(**value)}
 
-    @classmethod
-    def _handle_legacy_deployment_config(cls, value: Dict) -> Dict:
-        pooled_config = {}
-
-        if "resource_config" in value:
-            resource_config = value["resource_config"]
-            pooled_config["pool_resource_config"] = PooledResourceConfig(
-                num_cpus=resource_config.get("num_cpus", 1.0),
-                num_gpus=resource_config.get("num_gpus", 0.0),
-                memory=resource_config.get("memory", 1024),
-                object_store_memory=resource_config.get("object_store_memory", 512),
-            )
-
-        if "autoscaling" in value:
-            autoscaling = value["autoscaling"]
-            pooled_config["autoscaling_config"] = AutoscalingSettings(
-                min_replicas=autoscaling.get("min_replicas", 2),
-                max_replicas=autoscaling.get("max_replicas", 50),
-                target_num_ongoing_requests_per_replica=autoscaling.get(
-                    "target_num_ongoing_requests_per_replica", 2
-                ),
-                metrics_interval_s=autoscaling.get("metrics_interval_s", 10.0),
-                look_back_period_s=autoscaling.get("look_back_period_s", 30.0),
-                smoothing_factor=autoscaling.get("smoothing_factor", 1.0),
-            )
-
-        return {"pooled_deployment": PooledDeploymentSettings(**pooled_config)}
 
     @classmethod
     def _handle_routing_config(cls, value: Dict) -> Dict:
@@ -429,6 +381,11 @@ class Config:
     @classmethod
     def _handle_connection_pooling_config(cls, value: Dict) -> Dict:
         return {"connection_pooling": ConnectionPoolingConfig(**value)}
+
+    @classmethod
+    def _handle_worker_config(cls, value: Dict) -> Dict:
+        """Handle worker configuration for optimal deployment management"""
+        return {"worker_config": WorkerConfig(**value)}
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
@@ -499,8 +456,7 @@ class Config:
         return (
             f"Config(tiered_loading={self.tiered_loading.enable_tiered_loading}, "
             f"tier_based_deployment={tier_enabled}, "
-            f"resource_sharing={self.resource_sharing.strategy.value}, "
-            f"pools={self.pooled_deployment.default_pool_count})"
+            f"resource_sharing={self.resource_sharing.strategy.value})"
         )
 
     def __repr__(self) -> str:

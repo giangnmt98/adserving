@@ -1,39 +1,175 @@
 """
 Main FastAPI application entry point
-Enhanced with request body capture middleware for better validation error handling
+Enhanced with ultra-scale deployment integration
 """
 
 import sys
+import os
+import time
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from adserving.src.utils.logger import get_logger
+from adserving.src.config.config import Config, create_sample_config
+from adserving.src.service.service_components import ServiceComponents
 
 # Configure basic logging
 logger = get_logger()
 
+# Global service components
+service_components: Optional[ServiceComponents] = None
+config: Optional[Config] = None
+
+
+async def load_configuration():
+    """Load or create configuration."""
+    global config
+    config_file = "config.yaml"
+    
+    try:
+        if not Path(config_file).exists():
+            logger.info(f"Creating default config: {config_file}")
+            create_sample_config(config_file)
+
+        logger.info(f"Loading configuration from: {config_file}")
+        config = Config.from_file(config_file)
+        
+        logger.info(f"Configuration loaded successfully")
+        return config
+
+    except Exception as e:
+        logger.error(f"Failed to load configuration: {e}")
+        raise
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan events"""
+    """Application lifespan events - models deployed BEFORE server becomes alive"""
+    global service_components, config
+    
     # Startup
-    logger.info("Starting up Anomaly Detection API...")
+    logger.info("Starting up Anomaly Detection API with model pre-deployment...")
 
     try:
-        # Initialize any startup processes here
-        logger.info("Application startup completed successfully")
+        # 1. Load configuration
+        logger.info("Loading configuration...")
+        config = await load_configuration()
+        
+        # 2. Initialize minimal service components
+        logger.info("Initializing service components...")
+        service_components = ServiceComponents()
+        service_components.initialize_minimal(config)
+        
+        # 3. Complete Ray initialization BEFORE deployment
+        logger.info("Completing Ray initialization and full component setup...")
+        init_start_time = time.time()
+        
+        await service_components.complete_initialization(config)
+        
+        init_time = time.time() - init_start_time
+        logger.info(f"Ray initialization completed in {init_time:.2f}s")
+        
+        # 4. Start background services
+        logger.info("Starting background services...")
+        service_components.start_background_services()
+        
+        # 5. Deploy models BEFORE server becomes alive (FIXED!)
+        logger.info("Deploying models BEFORE server startup...")
+        deployment_start_time = time.time()
+        
+        model_stats = await service_components.deploy_production_models()
+        
+        deployment_time = time.time() - deployment_start_time
+        total_time = time.time() - init_start_time
+        
+        logger.info(f"Model deployment completed in {deployment_time:.2f}s - "
+                   f"loaded: {model_stats['loaded']}, failed: {model_stats['failed']}")
+        logger.info(f"Total initialization time: {total_time:.2f}s")
+        
+        # 6. Update readiness state with deployed models
+        service_components.update_readiness_state(
+            ready=True,  # Fully ready with models deployed
+            models_loaded=model_stats["loaded"],
+            models_failed=model_stats["failed"],
+        )
+
+        logger.info("Application startup completed successfully - server ready with models deployed!")
+        logger.info(f"✅ Models deployed and routers created BEFORE FastAPI server alive!")
 
         yield
 
     except Exception as e:
         logger.error(f"Error during application startup: {e}")
+        if service_components:
+            try:
+                service_components.cleanup()
+            except Exception as cleanup_error:
+                logger.error(f"Error during cleanup: {cleanup_error}")
         raise
     finally:
         # Shutdown
         logger.info("Shutting down Anomaly Detection API...")
+        if service_components:
+            try:
+                service_components.cleanup()
+                logger.info("Service components cleaned up successfully")
+            except Exception as e:
+                logger.error(f"Error during service cleanup: {e}")
         logger.info("Application shutdown completed")
+
+
+async def background_initialization_and_deployment(config):
+    """Complete Ray initialization and model deployment in background without blocking server startup"""
+    global service_components
+    
+    try:
+        logger.info("Background initialization: Starting Ray and full component setup...")
+        init_start_time = time.time()
+        
+        # Step 1: Complete full initialization (Ray + all components)
+        await service_components.complete_initialization(config)
+        
+        init_time = time.time() - init_start_time
+        logger.info(f"Background Ray initialization completed in {init_time:.2f}s")
+        
+        # Step 2: Start background services
+        logger.info("Background initialization: Starting background services...")
+        service_components.start_background_services()
+        
+        # Step 3: Deploy models asynchronously
+        logger.info("Background deployment: Starting model deployment...")
+        deployment_start_time = time.time()
+        
+        model_stats = await service_components.deploy_production_models()
+        
+        deployment_time = time.time() - deployment_start_time
+        total_time = time.time() - init_start_time
+        
+        logger.info(f"Background deployment completed in {deployment_time:.2f}s - "
+                   f"loaded: {model_stats['loaded']}, failed: {model_stats['failed']}")
+        logger.info(f"Total background initialization time: {total_time:.2f}s")
+        
+        # Update readiness state when everything completes
+        service_components.update_readiness_state(
+            ready=True,  # Now fully ready with models deployed
+            models_loaded=model_stats["loaded"],
+            models_failed=model_stats["failed"],
+        )
+        
+        logger.info("All components initialized and models deployed - service fully ready!")
+        
+    except Exception as e:
+        logger.error(f"Background initialization and deployment failed: {e}")
+        # Update state to show initialization failed but server still alive
+        service_components.update_readiness_state(
+            ready=False,
+            models_loaded=0,
+            models_failed=1,
+        )
 
 
 def create_app(api_prefix: str = "") -> FastAPI:
@@ -46,26 +182,35 @@ def create_app(api_prefix: str = "") -> FastAPI:
         from adserving.src.api import prediction_endpoint
         from adserving.src.api import model_endpoints
         from adserving.src.api import core_endpoints
-        from adserving.src.api import tier_management_endpoints
 
         # Get application configuration
         config = get_config()
 
-        # Create base FastAPI config
+        # Use api_prefix from config if not provided as parameter
+        if not api_prefix and hasattr(config, 'api_prefix'):
+            api_prefix = config.api_prefix
+            
+        # Create base FastAPI config with proper docs URLs
+        if api_prefix and api_prefix.strip():
+            docs_url = f"{api_prefix}/docs"
+            redoc_url = f"{api_prefix}/redoc" 
+            openapi_url = f"{api_prefix}/openapi.json"
+            logger.info(f"API configured with prefix: {api_prefix}")
+        else:
+            docs_url = "/docs"
+            redoc_url = "/redoc"
+            openapi_url = "/openapi.json"
+            logger.info("API configured without prefix")
+
         api_config = {
             "title": "Anomaly Detection API",
             "description": "Enhanced MLOps serving system with advanced validation error handling",
             "version": config.api_version,
             "lifespan": lifespan,
-            "docs_url": "/docs",
-            "redoc_url": "/redoc",
-            "openapi_url": "/openapi.json"
+            "docs_url": docs_url,
+            "redoc_url": redoc_url,
+            "openapi_url": openapi_url
         }
-
-        # Add root_path only if api_prefix is provided
-        if api_prefix and api_prefix.strip():
-            api_config["root_path"] = api_prefix
-            logger.info(f"API configured with prefix: {api_prefix}")
 
         app = FastAPI(**api_config)
 
@@ -95,11 +240,11 @@ def create_app(api_prefix: str = "") -> FastAPI:
 
         logger.info("Exception handlers registered successfully")
 
-        # Include routers with their respective tags
-        app.include_router(core_endpoints.router, tags=["Core"])
-        app.include_router(prediction_endpoint.router, tags=["Prediction"])
-        app.include_router(model_endpoints.router, tags=["Models"])
-        app.include_router(tier_management_endpoints.router, tags=["Tier Management"])
+        # Include routers with their respective tags and prefix
+        prefix_to_use = api_prefix if api_prefix and api_prefix.strip() else ""
+        app.include_router(core_endpoints.router, tags=["Core"], prefix=prefix_to_use)
+        app.include_router(prediction_endpoint.router, tags=["Prediction"], prefix=prefix_to_use)
+        app.include_router(model_endpoints.router, tags=["Models"], prefix=prefix_to_use)
 
         logger.info("API routes registered successfully")
 
@@ -115,7 +260,7 @@ def create_app(api_prefix: str = "") -> FastAPI:
 
 
 def main() -> None:
-    """Main entry point for the application"""
+    """Main entry point for the application with integrated ultra-scale deployment"""
     try:
         # Ensure we're in the correct directory
         current_dir = Path(__file__).parent
@@ -125,17 +270,29 @@ def main() -> None:
             logger.error("Please run from the project root directory")
             sys.exit(1)
 
-        # Import and run service using the main service module
-        from adserving.src.service import AnomalyDetectionServe
+        # Import uvicorn for running the server
+        import uvicorn
+        
+        # Get host and port from environment or use defaults
+        host = os.getenv("MLOPS_HOST", "0.0.0.0")
+        port = int(os.getenv("MLOPS_PORT", "8000"))
+        
+        logger.info(f"Starting Anomaly Detection Serve with ultra-scale deployment on {host}:{port}")
 
-        # Create service instance
-        service = AnomalyDetectionServe()
+        # Create the FastAPI app with integrated ultra-scale deployment
+        app_instance = create_app()
 
-        # Run the service (this will use the FastAPI app created by create_app)
-        service.run()
+        # Run the server directly
+        uvicorn.run(
+            app_instance,
+            host=host,
+            port=port,
+            log_level="info",
+            access_log=True,
+        )
 
     except ImportError as e:
-        logger.error(f"Failed to import service components: {e}")
+        logger.error(f"Failed to import required components: {e}")
         logger.error("Ensure all dependencies are installed:")
         logger.error("  pip install -r requirements.txt")
         sys.exit(1)
@@ -169,9 +326,10 @@ def run_development_server(
             app,
             host=host,
             port=port,
-            reload=reload,
+            reload=False,
             log_level="info",
             access_log=True,
+            workers=1,
             reload_dirs=["adserving"] if reload else None,
             reload_excludes=["*.pyc", "*.pyo", "__pycache__"] if reload else None
         )

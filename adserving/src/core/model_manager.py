@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 from adserving.src.config.config_manager import get_config
-from adserving.src.core.manager.deployment_manager import DeploymentManager
+from adserving.src.core.manager.ray_deployment_manager import RayDeploymentManager
 from adserving.src.core.manager.production_model_manager import ProductionModelManager
 from adserving.src.core.service.model_loader_service import ModelLoaderService
 from adserving.src.core.service.monitoring_service import ModelMonitoringService
@@ -47,39 +47,41 @@ class ModelManager:
         # Tiered cache
         self.cache = TieredModelCache(hot_cache_size, warm_cache_size, cold_cache_size)
 
+        # Initialize tier configuration (FIXED: missing attribute causing error)
+        self.tier_config = {}  # Will be populated with model tier assignments
+
         # MLflow client with connection pooling optimization
         self.mlflow_client = MLflowClient(mlflow_tracking_uri)
 
         # Threading - Limit worker count to prevent OOM issues
         cpu_count = os.cpu_count() or 1
-        actual_workers = min(max_workers, 16, cpu_count * 2)
-        self.executor = ThreadPoolExecutor(max_workers=actual_workers)
-        self.logger.info(
-            f"ThreadPoolExecutor initialized with "
-            f"{actual_workers} workers (CPU cores: {cpu_count}, "
-            f"limited to prevent OOM, requested: {max_workers})"
+
+        # Initialize ThreadPoolExecutor (FIXED: was missing!)
+        effective_workers = min(self.max_workers, cpu_count * 2)
+        self.executor = ThreadPoolExecutor(max_workers=effective_workers)
+        self.logger.info(f"ThreadPoolExecutor initialized with {effective_workers} workers")
+
+        # Ray-based deployment manager (eliminates all worker mechanisms)
+        # Load Ray optimization configuration for dynamic parameters
+        config = get_config()
+        ray_config = getattr(config, 'ray', None)
+        ray_optimization = getattr(ray_config, 'optimization', {}) if ray_config else {}
+        num_actors = ray_optimization.get('num_deployment_actors', 4)
+
+        # Import Ray-serializable function to avoid serialization issues
+        from adserving.src.core.ray_model_deployment_manager import ray_serializable_model_loader
+
+        self.deployment_manager = RayDeploymentManager(
+            load_model_func=ray_serializable_model_loader,  # Use Ray-serializable function
+            num_actors=num_actors  # Configurable Ray actors instead of workers
         )
 
-        # Model tier configuration
-        self.tier_config = self._load_tier_config()
-
-        # Deployment manager
-        self.deployment_manager = DeploymentManager(
-            load_model_func=self._load_model_sync
-        )
-
-        # Initialize services
+        # Initialize services (now with proper executor)
         self.monitoring_service = ModelMonitoringService(model_manager=self, config=get_config(),
                                                          enable_model_warming=enable_model_warming)
         self.model_loader = ModelLoaderService(self, self.executor)
         self.production_model_manager = ProductionModelManager(self)
         self.prediction_service = PredictionService(self)
-
-    def _load_tier_config(self) -> Dict[str, ModelTier]:
-        """Load model tier configuration"""
-        # This could be loaded from a configuration file
-        # For now, return the default configuration
-        return {}
 
     def start_monitoring(self):
         """Start background monitoring and optimization with zero-downtime deployment"""

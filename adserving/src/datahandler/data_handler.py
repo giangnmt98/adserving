@@ -85,6 +85,14 @@ class DataHandler:
                     for val_error in validation_errors
                 ]
 
+            # Check if detailed_results has the expected structure
+            if "results" not in detailed_results:
+                # Handle case where detailed_results doesn't have 'results' key
+                self.logger.error(f"Missing 'results' key in detailed_results: {detailed_results}")
+                return self._create_error_response_from_detailed_results(
+                    request_id, total_time, ma_don_vi, ma_bao_cao, ky_du_lieu, detailed_results
+                )
+            
             results_list = detailed_results["results"]
             metadata, request_info = self._create_metadata_and_request_info(
                 results_list[0], request_id, total_time
@@ -115,11 +123,20 @@ class DataHandler:
                 ma_don_vi=ma_don_vi, ma_bao_cao=ma_bao_cao, ky_du_lieu=ky_du_lieu
             )
 
-            return APIResponse(
+            # Create APIResponse and preserve multi-model metadata
+            api_response = APIResponse(
                 metadata=metadata,
                 request_info=request_info,
                 results=results_list,
             )
+
+            # Preserve multi-model metadata from detailed_results
+            multi_model_fields = ["model_name", "models_used", "deployment_method", "total_tasks", "successful_tasks", "failed_tasks"]
+            for field in multi_model_fields:
+                if field in detailed_results:
+                    setattr(api_response, field, detailed_results[field])
+
+            return api_response
 
         except Exception as e:
             self.logger.error(f"Error formatting detailed response: {e}")
@@ -144,16 +161,70 @@ class DataHandler:
             total_time=total_time,
         )
 
+        # Safe extraction of request info from detailed_results
+        ma_don_vi_fallback = "UNKNOWN"
+        ma_bao_cao_fallback = "UNKNOWN" 
+        ky_du_lieu_fallback = "UNKNOWN"
+        
+        if "results" in detailed_results and detailed_results["results"]:
+            first_result = detailed_results["results"][0]
+            ma_don_vi_fallback = first_result.get("ma_don_vi", "UNKNOWN")
+            ma_bao_cao_fallback = first_result.get("ma_bao_cao", "UNKNOWN")
+            ky_du_lieu_fallback = first_result.get("ky_du_lieu", "UNKNOWN")
+        
         request_info = RequestInfo(
-            ma_don_vi=detailed_results["results"][0]["ma_don_vi"],
-            ma_bao_cao=detailed_results["results"][0]["ma_bao_cao"],
-            ky_du_lieu=detailed_results["results"][0]["ky_du_lieu"],
+            ma_don_vi=ma_don_vi_fallback,
+            ma_bao_cao=ma_bao_cao_fallback,
+            ky_du_lieu=ky_du_lieu_fallback,
         )
 
         return APIResponse(
             metadata=metadata,
             request_info=request_info,
             results=[],
+        )
+
+    def _create_error_response_from_detailed_results(
+        self,
+        request_id: str,
+        total_time: float,
+        ma_don_vi: str,
+        ma_bao_cao: str,
+        ky_du_lieu: str,
+        detailed_results: Dict[str, Any],
+    ) -> APIResponse:
+        """Create error response when detailed_results doesn't have expected structure"""
+        
+        metadata = Metadata(
+            status="error",
+            timestamp=datetime.now().isoformat(),
+            request_id=request_id,
+            api_version=self.config.api_version,
+            total_time=total_time,
+        )
+
+        request_info = RequestInfo(
+            ma_don_vi=ma_don_vi,
+            ma_bao_cao=ma_bao_cao,
+            ky_du_lieu=ky_du_lieu,
+        )
+
+        # Create error result from detailed_results
+        error_result = {
+            "status": "error",
+            "error_code": detailed_results.get("error_code", "UNKNOWN_ERROR"),
+            "error_message": detailed_results.get("error_message", "An error occurred"),
+            "error_details": detailed_results.get("error_details", str(detailed_results)),
+            "model_name": detailed_results.get("model_name", "unknown"),
+            "ma_don_vi": ma_don_vi,
+            "ma_bao_cao": ma_bao_cao,
+            "ky_du_lieu": ky_du_lieu,
+        }
+
+        return APIResponse(
+            metadata=metadata,
+            request_info=request_info,
+            results=[error_result],
         )
 
     def _create_metadata_and_request_info(

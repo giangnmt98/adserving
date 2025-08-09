@@ -15,14 +15,16 @@ from ..api.api_dependencies import (
 )
 from ..config.config import Config
 from ..core.model_manager import ModelManager
-from ..core.tier_deployment_orchestrator import TierDeploymentOrchestrator
+from ..core.ray_model_deployment_manager import RayModelDeploymentManager
 from ..datahandler.data_handler import DataHandler
-from ..deployment.pooled_deployment import PooledModelDeployment
+from ..core.manager.ray_deployment_manager import RayDeploymentManager
+from ..core.manager.deployment_manager import DeploymentManager
 from ..monitoring.model_monitor import ModelMonitor
 from ..router.model_router import ModelRouter
 from .ray_manager import RayManager
-from .model_deployment_handler import ModelDeploymentHandler
 from ..api import api_dependencies
+from ..deployment.deployment_orchestrator import UltraScaleDeploymentOrchestrator
+from ..deployment.deployment_config import DeploymentConfig, ConfigurationManager
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +38,15 @@ class ServiceComponents:
         self.model_router: Optional[ModelRouter] = None
         self.monitor: Optional[ModelMonitor] = None
         self.input_handler: Optional[DataHandler] = None
-        self.deployment_manager: Optional[PooledModelDeployment] = None
-        self.tier_orchestrator: Optional[TierDeploymentOrchestrator] = None
+        self.deployment_manager: Optional[DeploymentManager] = None
+        self.ray_deployment_manager = None
         self.ray_manager = RayManager()
-        self.deployment_handler = ModelDeploymentHandler()
-        self.use_tier_based_deployment = True
         self.enhanced_error_handling_enabled = True
+        
+        # Ultra-scale deployment components
+        self.ultra_scale_orchestrator: Optional[UltraScaleDeploymentOrchestrator] = None
+        self.deployment_config_manager: Optional[ConfigurationManager] = None
+        self.use_ultra_scale_deployment = False
 
     def initialize_all(self, config: Config) -> None:
         """Initialize all service components."""
@@ -53,16 +58,17 @@ class ServiceComponents:
                 config, "enable_enhanced_error_handling", True
             )
 
-            # Check if tier-based deployment is enabled
-            self.use_tier_based_deployment = hasattr(
-                config, "tier_based_deployment"
+
+            # Check if ultra-scale deployment is enabled
+            self.use_ultra_scale_deployment = hasattr(
+                config, "ultra_scale_deployment"
             ) and getattr(
-                config.tier_based_deployment, "enable_tier_based_deployment", False
+                config.ultra_scale_deployment, "enable_ultra_scale_deployment", False
             )
 
             logger.info(
-                f"Tier-based deployment: "
-                f"{'enabled' if self.use_tier_based_deployment else 'disabled'}"
+                f"Ultra-scale deployment: "
+                f"{'enabled' if self.use_ultra_scale_deployment else 'disabled'}"
             )
             logger.info(
                 f"Enhanced error handling: "
@@ -75,10 +81,6 @@ class ServiceComponents:
             # Initialize core components
             self._initialize_core_components(config)
 
-            # Initialize tier orchestrator if enabled
-            if self.use_tier_based_deployment:
-                self._initialize_tier_orchestrator(config)
-
             # Initialize FastAPI dependencies
             self._initialize_fastapi_dependencies()
 
@@ -88,6 +90,64 @@ class ServiceComponents:
             logger.error(f"Failed to initialize services: {e}")
             raise
 
+    def initialize_minimal(self, config: Config) -> None:
+        """Initialize minimal components for fast server startup - defer Ray initialization."""
+        try:
+            logger.info("Initializing minimal service components for fast startup...")
+
+            # Check enhanced error handling configuration
+            self.enhanced_error_handling_enabled = getattr(
+                config, "enable_enhanced_error_handling", True
+            )
+
+            # Check if ultra-scale deployment is enabled
+            self.use_ultra_scale_deployment = hasattr(
+                config, "ultra_scale_deployment"
+            ) and getattr(
+                config.ultra_scale_deployment, "enable_ultra_scale_deployment", False
+            )
+
+            logger.info(
+                f"Ultra-scale deployment: "
+                f"{'enabled' if self.use_ultra_scale_deployment else 'disabled'}"
+            )
+            logger.info(
+                f"Enhanced error handling: "
+                f"{'enabled' if self.enhanced_error_handling_enabled else 'disabled'}"
+            )
+
+            # Initialize only basic components (no Ray dependencies)
+            self._initialize_basic_components(config)
+
+            # Initialize minimal FastAPI dependencies
+            self._initialize_minimal_fastapi_dependencies()
+
+            logger.info("Minimal services initialized successfully - Ray initialization deferred")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize minimal services: {e}")
+            raise
+
+    async def complete_initialization(self, config: Config) -> None:
+        """Complete full initialization with Ray and model deployment in background."""
+        try:
+            logger.info("Starting background initialization of Ray and model components...")
+
+            # Initialize Ray Serve (this is the slow part)
+            self.ray_manager.initialize(config)
+
+            # Initialize Ray-dependent components
+            self._initialize_ray_dependent_components(config)
+
+            # Initialize full FastAPI dependencies
+            self._initialize_fastapi_dependencies()
+
+            logger.info("Background initialization completed successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to complete background initialization: {e}")
+            raise
+
     def _initialize_core_components(self, config: Config) -> None:
         """Initialize all core components."""
         self._initialize_model_manager(config)
@@ -95,6 +155,38 @@ class ServiceComponents:
         self._initialize_monitor(config)
         self._initialize_input_handler()
         self._initialize_deployment_manager(config)
+        
+        # Initialize ultra-scale deployment if enabled
+        if self.use_ultra_scale_deployment:
+            self._initialize_ultra_scale_deployment(config)
+
+    def _initialize_basic_components(self, config: Config) -> None:
+        """Initialize basic components that don't depend on Ray."""
+        # Input handler can work without Ray
+        self._initialize_input_handler()
+        
+        # Monitor can work without Ray for basic health checks
+        self._initialize_monitor(config)
+        
+        logger.info("Basic components initialized (no Ray dependencies)")
+
+    def _initialize_ray_dependent_components(self, config: Config) -> None:
+        """Initialize components that depend on Ray being ready."""
+        self._initialize_model_manager(config)
+        self._initialize_model_router(config)
+        self._initialize_deployment_manager(config)
+        
+        # Initialize ultra-scale deployment if enabled
+        if self.use_ultra_scale_deployment:
+            self._initialize_ultra_scale_deployment(config)
+            
+        logger.info("Ray-dependent components initialized")
+
+    def _initialize_minimal_fastapi_dependencies(self) -> None:
+        """Initialize minimal FastAPI dependencies for basic server functionality."""
+        # For now, defer all FastAPI dependencies until full initialization
+        # This ensures basic health check endpoints can work without complex dependencies
+        logger.info("Minimal FastAPI dependencies deferred until full initialization")
 
     def _initialize_model_manager(self, config: Config) -> None:
         """Initialize Model Manager."""
@@ -113,7 +205,6 @@ class ServiceComponents:
         logger.info("Setting up Model Router...")
         self.model_router = ModelRouter(
             model_manager=self.model_manager,
-            pooled_deployment=config.pooled_deployment,
             routing_strategy=config.routing.strategy,
             enable_request_queuing=config.routing.enable_request_queuing,
             max_queue_size=config.routing.max_queue_size,
@@ -135,14 +226,88 @@ class ServiceComponents:
         self.input_handler = DataHandler()
 
     def _initialize_deployment_manager(self, config: Config) -> None:
-        """Initialize Deployment Manager."""
-        logger.info("Setting up Deployment Manager...")
-        self.deployment_manager = PooledModelDeployment(self.model_manager, config)
+        """Initialize Ray-based Deployment Manager (eliminates all worker mechanisms)."""
+        logger.info("Setting up Ray-based Deployment Manager (no workers, pure Ray parallel processing)...")
+        
+        # Provide model loading function from model_manager
+        load_model_func = None
+        if self.model_manager:
+            load_model_func = self.model_manager._load_model_sync
+        
+        # Get number of Ray actors from config (replaces worker count)
+        num_actors = getattr(config, 'ray_deployment_actors', 4)  # Default 4 Ray actors
+        logger.info(f"Using Ray parallel deployment with {num_actors} Ray actors (no workers)")
+        
+        self.deployment_manager = RayDeploymentManager(
+            batch_size=5,
+            batch_interval=2.0,
+            load_model_func=load_model_func,
+            num_actors=num_actors
+        )
+        
+        # Initialize Ray Model Deployment Manager for request routing
+        logger.info("Setting up Ray Model Deployment Manager for request handling...")
+        self.ray_deployment_manager = RayModelDeploymentManager(self.model_manager)
 
-    def _initialize_tier_orchestrator(self, config: Config) -> None:
-        """Initialize Tier-based Deployment Orchestrator."""
-        logger.info("Setting up Tier-based Deployment Orchestrator...")
-        self.tier_orchestrator = TierDeploymentOrchestrator(self.model_manager, config)
+
+    def _initialize_ultra_scale_deployment(self, config: Config) -> None:
+        """Initialize Ultra-Scale Deployment components."""
+        logger.info("Setting up Ultra-Scale Deployment...")
+        
+        # Initialize configuration manager
+        self.deployment_config_manager = ConfigurationManager()
+        
+        # Create deployment configuration from existing config
+        deployment_config = self._create_deployment_config_from_adserving_config(config)
+        
+        # Initialize ultra-scale deployment orchestrator
+        self.ultra_scale_orchestrator = UltraScaleDeploymentOrchestrator(deployment_config)
+        
+        logger.info("Ultra-Scale Deployment components initialized successfully")
+
+    def _create_deployment_config_from_adserving_config(self, config: Config) -> DeploymentConfig:
+        """Create DeploymentConfig from existing adserving Config."""
+        from ..deployment.deployment_config import (
+            DeploymentConfig, DeploymentMode, ResourceLimits, 
+            ModelTierConfig, RayConfig, MLflowConfig
+        )
+        
+        # Map adserving config to deployment config
+        deployment_config = DeploymentConfig(
+            mode=DeploymentMode.PRODUCTION,
+            environment_name=getattr(config, 'environment', 'production'),
+            target_model_count=getattr(config, 'max_models', 2000),
+            
+            # Resource configuration
+            resources=ResourceLimits(
+                max_cpu_cores=getattr(config, 'max_workers', 16),
+                max_memory_mb=16000,
+                max_disk_gb=100
+            ),
+            
+            # Model tier configuration
+            model_tiers=ModelTierConfig(
+                hot_tier_max_models=getattr(config.tiered_loading, 'hot_cache_size', 500),
+                warm_tier_max_models=getattr(config.tiered_loading, 'warm_cache_size', 1000),
+                cold_tier_max_models=getattr(config.tiered_loading, 'cold_cache_size', 10000)
+            ),
+            
+            # Ray configuration
+            ray=RayConfig(
+                enabled=True,
+                num_cpus=getattr(config.ray, 'num_cpus', None) if hasattr(config, 'ray') else None,
+                num_gpus=getattr(config.ray, 'num_gpus', None) if hasattr(config, 'ray') else None,
+                object_store_memory_gb=8
+            ),
+            
+            # MLflow configuration
+            mlflow=MLflowConfig(
+                enabled=True,
+                tracking_uri=config.mlflow.tracking_uri
+            )
+        )
+        
+        return deployment_config
 
     def _initialize_fastapi_dependencies(self) -> None:
         """Initialize FastAPI dependencies with enhanced error handling."""
@@ -154,19 +319,17 @@ class ServiceComponents:
             self.model_router,
             self.monitor,
             self.input_handler,
-            self.tier_orchestrator,
-            self.use_tier_based_deployment,
+            self.ray_deployment_manager,
+            None,  # tier_orchestrator removed
+            False,  # use_tier_based_deployment removed
+            self.ultra_scale_orchestrator,  # ultra_orchestrator
+            self.use_ultra_scale_deployment,  # ultra_scale
         )
 
-        # Cập nhật global variable
-        api_dependencies.use_tier_based_deployment = self.use_tier_based_deployment
-
-        # Set tier orchestrator if available
-        if self.tier_orchestrator and self.use_tier_based_deployment:
-            api_dependencies.tier_orchestrator = self.tier_orchestrator
-            logger.info("Tier-based deployment enabled and configured")
+        if self.use_ultra_scale_deployment:
+            logger.info("Ultra-scale deployment enabled and configured")
         else:
-            logger.warning("Tier-based deployment is disabled")
+            logger.info("Ultra-scale deployment is disabled")
 
         # Enable enhanced error handling if configured
         if self.enhanced_error_handling_enabled:
@@ -179,170 +342,118 @@ class ServiceComponents:
 
     # Các methods khác giữ nguyên như code gốc...
     async def deploy_production_models(self) -> Dict[str, int]:
-        """Deploy production models with parallel loading or tier-based deployment with HOT tier pre-loading."""
+        """Deploy production models using parallel deployment strategy with Ray Model Router System."""
         if not self.model_manager:
             return {"loaded": 0, "failed": 0}
 
-        if self.use_tier_based_deployment and self.tier_orchestrator:
-            # Use tier-based deployment with HOT tier pre-loading
-            logger.info("Deploying models using tier-based deployment strategy...")
+        # Use ultra-scale deployment if enabled and available
+        if self.use_ultra_scale_deployment and self.ultra_scale_orchestrator:
+            logger.info("Deploying models using ultra-scale deployment strategy...")
+            return await self._deploy_with_ultra_scale()
+
+        # Use ModelDeploymentHandler with parallel Ray deployment (FIXED from sequential fallback)
+        logger.info("Using parallel Ray Model Router deployment...")
+        
+        try:
+            # Import and use the parallel ModelDeploymentHandler we implemented
+            from ..service.model_deployment_handler import ModelDeploymentHandler
+            
+            deployment_handler = ModelDeploymentHandler()
+            
+            # Deploy all models in parallel using Ray Model Router workflow
+            logger.info("Starting parallel Load > Deploy > Route workflow for all production models")
+            deployment_stats = deployment_handler.deploy_models(
+                self.model_manager,
+                self.deployment_manager, 
+                self.model_router
+            )
+            
+            loaded = deployment_stats.get("loaded", 0)
+            failed = deployment_stats.get("failed", 0)
+            
+            logger.info(f"Parallel deployment completed: {loaded} successful, {failed} failed")
+            return {"loaded": loaded, "failed": failed}
+                
+        except Exception as e:
+            logger.error(f"Parallel deployment failed: {e}")
+            
+            # Emergency fallback: Try basic sequential loading if parallel fails
+            logger.warning("Falling back to sequential deployment due to parallel deployment failure")
             try:
-                success = await self.tier_orchestrator.initialize()
-                if success:
-                    # Get tier statistics
-                    tier_stats = self.tier_orchestrator.get_tier_statistics()
-                    tier_management = tier_stats.get("tier_management", {})
-
-                    # Pre-load HOT tier models to ensure they're truly ready
-                    hot_tier_models = tier_management.get("hot", {}).get("models", [])
-                    loaded_count = 0
-                    failed_count = 0
-
-                    if hot_tier_models:
-                        logger.info(
-                            f"Pre-loading {len(hot_tier_models)} HOT tier models..."
-                        )
-                        loaded_count, failed_count = await self._load_hot_tier_models(
-                            hot_tier_models
-                        )
-                        logger.info(
-                            f"HOT tier models loaded: {loaded_count} successful, {failed_count} failed"
-                        )
-
-                    # Warm up tier-based deployment pools
-                    if loaded_count > 0:
-                        await self._warm_up_tier_deployments()
-
-                    total_models = sum(
-                        tier_data.get("model_count", 0)
-                        for tier_data in tier_management.values()
-                    )
-                    logger.info(
-                        f"Tier-based deployment completed: {total_models} models registered, {loaded_count} HOT models pre-loaded"
-                    )
-                    return {"loaded": loaded_count, "failed": failed_count}
+                if hasattr(self.model_manager, 'get_production_models'):
+                    production_models = self.model_manager.get_production_models()
+                    loaded = 0
+                    failed = 0
+                    
+                    # Limit to reasonable number for fallback
+                    hot_cache_capacity = min(50, len(production_models))  
+                    
+                    for model_name in production_models[:hot_cache_capacity]:
+                        try:
+                            # Just load to cache in fallback mode
+                            model_info = await self.model_manager.load_model_async(model_name)
+                            if model_info:
+                                loaded += 1
+                                logger.info(f"Fallback: Model {model_name} loaded to cache")
+                            else:
+                                failed += 1
+                        except Exception as model_error:
+                            failed += 1
+                            logger.error(f"Fallback: Error loading model {model_name}: {model_error}")
+                    
+                    return {"loaded": loaded, "failed": failed}
                 else:
-                    logger.error("Failed to initialize tier-based deployment")
-                    return {"loaded": 0, "failed": 1}
-            except Exception as e:
-                logger.error(f"Error in tier-based deployment: {e}")
-                return {"loaded": 0, "failed": 1}
-        else:
-            # Use traditional deployment
-            if not self.deployment_manager:
+                    logger.warning("No production models method available in fallback")
+                    return {"loaded": 0, "failed": 0}
+            except Exception as fallback_error:
+                logger.error(f"Emergency fallback deployment also failed: {fallback_error}")
                 return {"loaded": 0, "failed": 0}
 
-            return self.deployment_handler.deploy_models(
-                self.model_manager, self.deployment_manager, self.model_router
-            )
-
-    async def _load_hot_tier_models(self, hot_tier_models: list) -> tuple[int, int]:
-        """Load HOT tier models into ModelManager and synchronize TierManager state."""
-        loaded_count = 0
-        failed_count = 0
-
-        logger.info(
-            f"Loading {len(hot_tier_models)} HOT tier models into ModelManager..."
-        )
-
-        # Load models sequentially to avoid overwhelming the system
-        for model_name in hot_tier_models:
-            try:
-                logger.debug(f"Loading HOT tier model: {model_name}")
-                # Use async model loading to load the model into ModelManager
-                model_info = await self.model_manager.load_model_async(model_name)
-
-                if model_info:
-                    loaded_count += 1
-                    logger.debug(f"Successfully loaded HOT tier model: {model_name}")
-
-                    # CRITICAL FIX: Synchronize TierManager state with ModelManager
-                    if self.tier_orchestrator and self.tier_orchestrator.tier_manager:
-                        # Update tier manager tracking to reflect that model is loaded and deployed
-                        self.tier_orchestrator.tier_manager.loaded_models.add(
-                            model_name
-                        )
-                        self.tier_orchestrator.tier_manager.deployed_models.add(
-                            model_name
-                        )
-                        logger.debug(
-                            f"Synchronized TierManager state for HOT model: {model_name}"
-                        )
-                else:
-                    failed_count += 1
-                    logger.warning(f"Failed to load HOT tier model: {model_name}")
-
-            except Exception as e:
-                failed_count += 1
-                logger.error(f"Error loading HOT tier model {model_name}: {e}")
-
-        logger.info(
-            f"HOT tier model loading completed: {loaded_count} loaded, {failed_count} failed"
-        )
-        logger.info(
-            f"TierManager state synchronized for {loaded_count} HOT tier models"
-        )
-        return loaded_count, failed_count
-
-    async def _warm_up_tier_deployments(self):
-        """Warm up tier-based deployment pools to prevent cold starts."""
+    async def _deploy_with_ultra_scale(self) -> Dict[str, int]:
+        """Deploy models using ultra-scale deployment system."""
         try:
-            logger.info("Warming up tier-based deployment pools...")
-
-            import ray
-            from ray import serve
-
-            # Get all Ray Serve deployments
-            deployments = serve.list_deployments()
-            if not deployments:
-                logger.warning("No Ray Serve deployments found for warmup")
-                return
-
-            # Find tier-based deployments (they have tier names in them)
-            tier_deployments = []
-            for deployment_name in deployments:
-                if any(
-                    tier in deployment_name.lower()
-                    for tier in ["hot", "warm", "cold", "pooled"]
-                ):
-                    tier_deployments.append(deployment_name)
-
-            if not tier_deployments:
-                logger.warning("No tier-based deployments found for warmup")
-                return
-
-            # Warm up each tier deployment with a test request
-            warmup_payload = {
-                "ma_don_vi": "UBND.0019",
-                "ma_bao_cao": "10628953_CT",
-                "ky_du_lieu": "2024-01-01",
-                "data": [{"ma_tieu_chi": "TONGCONG", "FN01": 1000000}],
-            }
-
-            for deployment_name in tier_deployments[:3]:  # Limit to first 3 deployments
-                try:
-                    logger.debug(f"Warming up deployment: {deployment_name}")
-                    deployment_handle = serve.get_app_handle(deployment_name)
-
-                    # Make a warmup request with timeout
-                    result_ref = await deployment_handle.remote(warmup_payload)
-                    await asyncio.wait_for(ray.get(result_ref), timeout=10.0)
-
-                    logger.debug(
-                        f"Successfully warmed up deployment: {deployment_name}"
-                    )
-
-                except asyncio.TimeoutError:
-                    logger.warning(f"Warmup timeout for deployment: {deployment_name}")
-                except Exception as e:
-                    logger.warning(
-                        f"Warmup failed for deployment {deployment_name}: {e}"
-                    )
-
-            logger.info("Tier-based deployment warmup completed")
-
+            # Initialize the ultra-scale deployment system
+            await self.ultra_scale_orchestrator.initialize()
+            
+            # Get production models from existing model manager
+            production_models = []
+            if hasattr(self.model_manager, 'get_production_models'):
+                model_names = self.model_manager.get_production_models()
+                
+                # Create model configurations for ultra-scale deployment
+                for model_name in model_names:
+                    model_config = {
+                        "name": model_name,
+                        "type": "mlflow",
+                        "version": "latest"
+                    }
+                    production_models.append(model_config)
+            
+            if not production_models:
+                logger.warning("No production models found for ultra-scale deployment")
+                return {"loaded": 0, "failed": 0}
+            
+            # Deploy models using ultra-scale deployment
+            logger.info(f"Deploying {len(production_models)} models with ultra-scale system...")
+            deployment_result = await self.ultra_scale_orchestrator.deploy_models_ultra_scale(
+                production_models,
+                deployment_strategy="blue_green"
+            )
+            
+            if deployment_result.get("success", False):
+                logger.info("Ultra-scale deployment completed successfully")
+                return {
+                    "loaded": deployment_result.get("deployed", 0),
+                    "failed": deployment_result.get("failed", 0)
+                }
+            else:
+                logger.error(f"Ultra-scale deployment failed: {deployment_result.get('error', 'Unknown error')}")
+                return {"loaded": 0, "failed": len(production_models)}
+                
         except Exception as e:
-            logger.warning(f"Tier deployment warmup failed (non-critical): {e}")
+            logger.error(f"Ultra-scale deployment error: {e}")
+            return {"loaded": 0, "failed": len(production_models) if 'production_models' in locals() else 0}
+
 
     def start_background_services(self) -> None:
         """Start background monitoring services."""
@@ -354,6 +465,15 @@ class ServiceComponents:
 
             if self.monitor:
                 self.monitor.start_monitoring()
+
+            # Start ultra-scale deployment background services if enabled
+            if self.use_ultra_scale_deployment and self.ultra_scale_orchestrator:
+                try:
+                    # The ultra-scale orchestrator's background services are started
+                    # during initialization, so we just log that they're available
+                    logger.info("Ultra-scale deployment background services are active")
+                except Exception as e:
+                    logger.warning(f"Failed to start ultra-scale deployment services: {e}")
 
             logger.info("Background services started")
 
@@ -375,6 +495,7 @@ class ServiceComponents:
     def cleanup(self) -> None:
         """Cleanup all components."""
         components = [
+            ("ray_serve_deployment_service", self.ray_serve_deployment_service),
             ("deployment_manager", self.deployment_manager),
             ("model_manager", self.model_manager),
             ("monitor", self.monitor),

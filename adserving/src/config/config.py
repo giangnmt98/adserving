@@ -21,13 +21,11 @@ from .config_manager import (
 from .core_configs import (
     AnomalyDetectionConfig,
     MLflowConfig,
-    PooledDeploymentSettings,
     RayConfig,
     ResourceSharingConfig,
     RoutingConfig,
     TieredLoadingConfig,
 )
-from .deployment_types import AutoscalingSettings, PooledResourceConfig
 
 # REMOVED: Direct import that causes circular dependency
 # from ..deployment.resource_config import TierBasedDeploymentConfig

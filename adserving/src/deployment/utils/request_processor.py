@@ -14,61 +14,61 @@ class RequestProcessor:
     def __init__(self, logger: Optional[FrameworkLogger] = None):
         self.logger = logger or get_logger()
 
-    def extract_model_names(self, request: Dict[str, Any]) -> List[str]:
-        """
-        Extract model names from request data - returns list for batch
-        processing
-        """
-        model_names = []
+        def extract_model_names(self, request: Dict[str, Any]) -> List[str]:
+            """
+            Extract model names from request data - returns list for batch
+            processing
+            """
+            model_names = []
 
-        # Handle the new format: ma_don_vi, ma_bao_cao, data with
-        # ma_tieu_chi and FN fields
-        if all(key in request for key in ["ma_don_vi", "ma_bao_cao", "data"]):
-            ma_don_vi = request["ma_don_vi"]
-            ma_bao_cao = request["ma_bao_cao"]
+            # Handle the new format: ma_don_vi, ma_bao_cao, data with
+            # ma_tieu_chi and FN fields
+            if all(key in request for key in ["ma_don_vi", "ma_bao_cao", "data"]):
+                ma_don_vi = request["ma_don_vi"]
+                ma_bao_cao = request["ma_bao_cao"]
 
-            if isinstance(request["data"], list):
-                for data_item in request["data"]:
-                    if "ma_tieu_chi" in data_item:
-                        ma_tieu_chi = data_item["ma_tieu_chi"]
+                if isinstance(request["data"], list):
+                    for data_item in request["data"]:
+                        if "ma_tieu_chi" in data_item:
+                            ma_tieu_chi = data_item["ma_tieu_chi"]
 
-                        # Extract FN fields from data item
-                        fn_fields = {
-                            k: v
-                            for k, v in data_item.items()
-                            if k.startswith("FN") and k != "ma_tieu_chi"
-                        }
+                            # Extract FN fields from data item
+                            fn_fields = {
+                                k: v
+                                for k, v in data_item.items()
+                                if k.startswith("FN") and k != "ma_tieu_chi"
+                            }
 
-                        # Create model name for each FN field
-                        for fld_code in fn_fields.keys():
-                            normalized_fld = self._normalize_field_code(fld_code)
-                            model_name = (
-                                f"{ma_don_vi}_{ma_bao_cao}_"
-                                f"{ma_tieu_chi}_{normalized_fld}"
-                            )
-                            model_names.append(model_name)
+                            # Create model name for each FN field
+                            for fld_code in fn_fields.keys():
+                                normalized_fld = self._normalize_field_code(fld_code)
+                                model_name = (
+                                    f"{ma_don_vi}_{ma_bao_cao}_"
+                                    f"{ma_tieu_chi}_{normalized_fld}"
+                                )
+                                model_names.append(model_name)
 
-        # Fallback to direct model_name specification
-        if not model_names and "model_name" in request:
-            model_names.append(request["model_name"])
+            # Fallback to direct model_name specification
+            if not model_names and "model_name" in request:
+                model_names.append(request["model_name"])
 
-        return model_names
+            return model_names
 
-    def _normalize_field_code(self, field_name: str) -> str:
-        """Normalize field code similar to input_handler"""
-        if not field_name.upper().startswith("FN"):
+        def _normalize_field_code(self, field_name: str) -> str:
+            """Normalize field code similar to input_handler"""
+            if not field_name.upper().startswith("FN"):
+                return field_name.upper()
+
+            # Extract number part
+            number_part = field_name[2:]
+            if number_part.isdigit():
+                # Pad with zero if single digit
+                if len(number_part) == 1:
+                    return f"FN0{number_part}"
+                else:
+                    return f"FN{number_part}"
+
             return field_name.upper()
-
-        # Extract number part
-        number_part = field_name[2:]
-        if number_part.isdigit():
-            # Pad with zero if single digit
-            if len(number_part) == 1:
-                return f"FN0{number_part}"
-            else:
-                return f"FN{number_part}"
-
-        return field_name.upper()
 
     def prepare_input_data(self, request: Dict[str, Any]) -> List[Dict[str, Any]]:
         """

@@ -14,7 +14,7 @@ class ColoredFormatter(logging.Formatter):
     # ANSI color codes
     COLORS = {
         "DEBUG": "\033[36m",  # Cyan
-        "INFO": "\033[32m",  # Green
+        "INFO": "\033[32m",  # Green 
         "WARNING": "\033[33m",  # Yellow
         "ERROR": "\033[31m",  # Red
         "CRITICAL": "\033[35m",  # Magenta
@@ -30,6 +30,9 @@ class ColoredFormatter(logging.Formatter):
         """
         super().__init__(fmt)
         self.use_colors = use_colors and self._supports_color()
+        # Add line number and filename to the log format if not already present
+        if fmt is None:
+            self._fmt = "%(asctime)s [%(name)s:%(lineno)d] [%(levelname)s] %(message)s"
 
     def _supports_color(self) -> bool:
         """Check if terminal supports color output.
@@ -37,7 +40,7 @@ class ColoredFormatter(logging.Formatter):
         Returns:
             True if colors are supported
         """
-        # Check if running in terminal and supports colors
+        # Check if running in terminal and supports colors 
         if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
             return False
 
@@ -72,261 +75,101 @@ class ColoredFormatter(logging.Formatter):
             # Format the message first without colors
             formatted = super().format(record)
 
-            # Apply color to the entire log line
-            return f"{color}{formatted}{reset}"
-        return super().format(record)
+            # Add line number and filename
+            filename = record.filename
+            lineno = record.lineno
+            formatted = f"{color}{formatted} [{filename}:{lineno}]{reset}"
+
+            return formatted
+
+        # Add line number and filename without colors
+        formatted = super().format(record)
+        filename = record.filename
+        lineno = record.lineno
+        formatted = f"{formatted} [{filename}:{lineno}]"
+
+        return formatted
 
 
-class FrameworkLogger:
-    """Enhanced logger class with config-based level and colored output."""
-
-    _instance: Optional["FrameworkLogger"] = None
-    _logger: Optional[logging.Logger] = None
-    _current_config: Optional[Dict[str, Any]] = None
-
-    def __new__(cls) -> "FrameworkLogger":
-        """Singleton pattern implementation."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __init__(self) -> None:
-        """Initialize the logger if not already initialized."""
-        if self._logger is None:
-            self._setup_logger()
-
-    def _setup_logger(self, config: Optional[Dict[str, Any]] = None) -> None:
-        """Setup the logger configuration.
-
-        Args:
-            config: Logger configuration dictionary
-        """
-        self._current_config = config or self._get_default_config()
-
-        self._logger = logging.getLogger("adtrainingmodel")
-
-        # Set log level from config
-        log_level = self._parse_log_level(self._current_config.get("level", "INFO"))
-        self._logger.setLevel(log_level)
-
-        # Remove existing handlers to avoid duplicates
-        for handler in self._logger.handlers[:]:
-            self._logger.removeHandler(handler)
-
-        # Create a console handler
-        self._setup_console_handler()
-
-        # Setup file handler if configured
-        if self._current_config.get("file_logging", {}).get("enabled", False):
-            self._setup_file_handler()
-
-        # Prevent propagation to root logger
-        self._logger.propagate = False
-
-    def _get_default_config(self) -> Dict[str, Any]:
-        """Get default logger configuration.
-
-        Returns:
-            Default configuration dictionary
-        """
-        return {
-            "level": "INFO",
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            "date_format": "%Y-%m-%d %H:%M:%S",
-            "use_colors": True,
-            "file_logging": {
-                "enabled": False,
-                "path": "logs/framework.log",
-                "max_bytes": 10485760,  # 10MB
-                "backup_count": 5,
-                "level": "DEBUG",
-            },
-        }
-
-    def _parse_log_level(self, level: str) -> int:
-        """Parse log level string to numeric level.
-
-        Args:
-            level: Log level string
-
-        Returns:
-            Numeric log level
-        """
-        level_mapping = {
-            "CRITICAL": logging.CRITICAL,
-            "ERROR": logging.ERROR,
-            "WARNING": logging.WARNING,
-            "WARN": logging.WARNING,
-            "INFO": logging.INFO,
-            "DEBUG": logging.DEBUG,
-            "NOTSET": logging.NOTSET,
-        }
-
-        normalized_level = str(level).upper()
-        return level_mapping.get(normalized_level, logging.INFO)
-
-    def _setup_console_handler(self) -> None:
-        """Setup console handler with colored output."""
-        if self._current_config is None or self._logger is None:
-            return
-
-        console_handler = logging.StreamHandler(sys.stdout)
-
-        # Set console handler level
-        console_level = self._parse_log_level(
-            self._current_config.get(
-                "console_level", self._current_config.get("level", "INFO")
-            )
-        )
-        console_handler.setLevel(console_level)
-
-        # Create colored formatter
-        use_colors = self._current_config.get("use_colors", True)
-        log_format = self._current_config.get(
-            "format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
-        date_format = self._current_config.get("date_format", "%Y-%m-%d %H:%M:%S")
-
-        formatter = ColoredFormatter(fmt=log_format, use_colors=use_colors)
-        formatter.datefmt = date_format
-
-        console_handler.setFormatter(formatter)
-        self._logger.addHandler(console_handler)
-
-    def _setup_file_handler(self) -> None:
-        """Setup file handler for logging to file."""
-        if self._current_config is None or self._logger is None:
-            return
-
-        try:
-            file_config = self._current_config.get("file_logging", {})
-            log_file = file_config.get("path", "logs/framework.log")
-
-            # Create a log directory if it doesn't exist
-            log_dir = Path(log_file).parent
-            log_dir.mkdir(parents=True, exist_ok=True)
-
-            # Create a rotating file handler
-            file_handler = RotatingFileHandler(
-                log_file,
-                maxBytes=file_config.get("max_bytes", 10485760),
-                backupCount=file_config.get("backup_count", 5),
-            )
-
-            # Set file handler level
-            file_level = self._parse_log_level(file_config.get("level", "DEBUG"))
-            file_handler.setLevel(file_level)
-
-            # Create plain formatter for file (no colors)
-            log_format = self._current_config.get(
-                "format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            date_format = self._current_config.get("date_format", "%Y-%m-%d %H:%M:%S")
-
-            file_formatter = logging.Formatter(log_format, date_format)
-            file_handler.setFormatter(file_formatter)
-
-            self._logger.addHandler(file_handler)
-
-        except Exception as e:
-            # Fallback to console logging if file setup fails
-            if self._logger:
-                self._logger.warning("Failed to setup file logging: %s", e)
-
-    def configure_from_config(self, config: Dict[str, Any]) -> None:
-        """Configure logger from config dictionary.
-
-        Args:
-            config: Configuration dictionary containing logger settings
-        """
-        # Extract logger configuration from main config
-        logger_config = config.get("logging", {})
-
-        # Merge with defaults
-        merged_config = {**self._get_default_config(), **logger_config}
-
-        # Reconfigure logger
-        self._setup_logger(merged_config)
-
-    def update_level(self, level: str) -> None:
-        """Update logger level dynamically.
-
-        Args:
-            level: New log level
-        """
-        numeric_level = self._parse_log_level(level)
-        if self._logger:
-            self._logger.setLevel(numeric_level)
-
-            # Update current config
-            if self._current_config:
-                self._current_config["level"] = level.upper()
-
-    @property
-    def logger(self) -> logging.Logger:
-        """Get the logger instance."""
-        if self._logger is None:
-            self._setup_logger()
-
-        # Đảm bảo _logger không còn None sau khi setup
-        if self._logger is None:
-            raise RuntimeError("Failed to initialize logger")
-
-        return self._logger
-
-    @property
-    def current_level(self) -> str:
-        """Get current log level as string."""
-        if self._logger:
-            return logging.getLevelName(self._logger.level)
-        return "INFO"
-
-    def info(self, message: str) -> None:
-        """Log info message."""
-        self.logger.info(message)
-
-    def warning(self, message: str) -> None:
-        """Log warning message."""
-        self.logger.warning(message)
-
-    def error(self, message: str) -> None:
-        """Log error message."""
-        self.logger.error(message)
-
-    def debug(self, message: str) -> None:
-        """Log debug message."""
-        self.logger.debug(message)
-
-    def critical(self, message: str) -> None:
-        """Log critical message."""
-        self.logger.critical(message)
-
-    def exception(self, message: str) -> None:
-        """Log an error message with exception information."""
-        self.logger.exception(message)
-
-    def set_level(self, level: str) -> None:
-        """Set logging level (legacy method for compatibility).
-
-        Args:
-            level: Log level string
-        """
-        self.update_level(level)
-
-
-def get_logger(config: Optional[Dict[str, Any]] = None) -> FrameworkLogger:
-    """Get the singleton logger instance with optional configuration.
-
+def get_logger(name: Optional[str] = None) -> logging.Logger:
+    """Get a logger instance with enhanced configuration.
+    
     Args:
-        config: Optional configuration dictionary
-
+        name: Logger name. If None, uses the calling module name.
+        
     Returns:
         Configured logger instance
     """
-    logger_instance = FrameworkLogger()
+    if name is None:
+        # Get the caller's module name
+        import inspect
+        frame = inspect.currentframe()
+        try:
+            if frame and frame.f_back:
+                caller_module = frame.f_back.f_globals.get('__name__', 'unknown')
+                name = caller_module
+            else:
+                name = 'adserving'
+        finally:
+            del frame
+    
+    # Get or create logger
+    logger = logging.getLogger(name)
+    
+    # Don't configure if already configured
+    if logger.handlers:
+        return logger
+    
+    # Set default level
+    logger.setLevel(logging.INFO)
+    
+    # Create console handler with colored formatter
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_formatter = ColoredFormatter(
+        fmt="%(asctime)s [%(name)s] [%(levelname)s] %(message)s",
+        use_colors=True
+    )
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+    
+    # Prevent duplicate logs
+    logger.propagate = False
+    
+    return logger
 
-    # Configure if config is provided
-    if config is not None:
-        logger_instance.configure_from_config(config)
 
-    return logger_instance
+def setup_file_logging(
+    logger: logging.Logger,
+    log_file: str,
+    max_bytes: int = 100 * 1024 * 1024,  # 100MB
+    backup_count: int = 5
+) -> None:
+    """Setup file logging for a logger.
+    
+    Args:
+        logger: Logger instance to configure
+        log_file: Path to log file
+        max_bytes: Maximum file size before rotation
+        backup_count: Number of backup files to keep
+    """
+    # Ensure log directory exists
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Create rotating file handler
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding='utf-8'
+    )
+    
+    # Use plain formatter for file (no colors)
+    file_formatter = logging.Formatter(
+        fmt="%(asctime)s [%(name)s:%(lineno)d] [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    file_handler.setFormatter(file_formatter)
+    
+    # Add handler to logger
+    logger.addHandler(file_handler)

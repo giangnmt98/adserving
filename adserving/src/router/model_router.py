@@ -17,11 +17,11 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
+import asyncio
 from ray import serve
 
 from adserving.src.core.model_manager import ModelManager
 
-from adserving.src.deployment.pooled_deployment import PooledModelDeployment
 from adserving.src.router.deployment_selector import DeploymentSelector
 from adserving.src.router.model_name_extractor import ModelNameExtractor
 from adserving.src.router.request_queue import RequestQueue
@@ -36,14 +36,12 @@ class ModelRouter:
     def __init__(
         self,
         model_manager: ModelManager,
-        pooled_deployment: PooledModelDeployment,
         routing_strategy: RoutingStrategy = RoutingStrategy.LEAST_LOADED,
         enable_request_queuing: bool = True,
         max_queue_size: int = 10000,
     ):
 
         self.model_manager = model_manager
-        self.pooled_deployment = pooled_deployment
         self.routing_strategy = routing_strategy
         self.enable_request_queuing = enable_request_queuing
 
@@ -55,6 +53,8 @@ class ModelRouter:
         # Routing metrics and state
         self.route_metrics: Dict[str, RouteMetrics] = {}
         self.deployment_loads: Dict[str, int] = defaultdict(int)
+        # Per-deployment locks to minimize contention on load counters
+        self._load_locks: Dict[str, threading.RLock] = defaultdict(threading.RLock)
         self.model_to_deployment: Dict[str, str] = {}
 
         # Round-robin state
@@ -82,6 +82,8 @@ class ModelRouter:
             if deployment_name not in self.available_deployments:
                 self.available_deployments.append(deployment_name)
                 self.deployment_loads[deployment_name] = 0
+                # Initialize per-deployment lock
+                self._load_locks[deployment_name] = threading.RLock()
                 self.logger.debug(f"Registered deployment: {deployment_name}")
 
     async def route_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -101,22 +103,16 @@ class ModelRouter:
                 tasks_by_model[model_name] = []
             tasks_by_model[model_name].append(task)
 
-        # Process each model group
-        for model_name, model_tasks in tasks_by_model.items():
+        # Process each model group in parallel
+        async def _process_model_group(model_name: str, model_tasks: List[Dict[str, Any]]):
+            group_results = []
+            group_failed = []
             try:
-                # Check if model/deployment exists
-                deployment_name = await self._select_deployment(
-                    model_name, model_tasks[0]
-                )
-
+                deployment_name = await self._select_deployment(model_name, model_tasks[0])
                 if not deployment_name:
-                    # Model doesn't exist - add all tasks to failed_elements
-                    error_details = await self._diagnose_deployment_unavailability(
-                        model_name, model_tasks[0]
-                    )
-
+                    error_details = await self._diagnose_deployment_unavailability(model_name, model_tasks[0])
                     for task in model_tasks:
-                        failed_elements.append(
+                        group_failed.append(
                             {
                                 "element_index": task.get("_element_index", -1),
                                 "ma_tieu_chi": task.get("_ma_tieu_chi", "unknown"),
@@ -125,35 +121,43 @@ class ModelRouter:
                                 "error_details": error_details,
                             }
                         )
-                    continue
+                    return group_results, group_failed
 
-                # Model exists - process tasks
-                for task in model_tasks:
-                    try:
-                        result = await self._send_to_deployment(deployment_name, task)
-                        results.append(
-                            {
+                # Process tasks within this model in parallel with a per-group semaphore
+                semaphore = asyncio.Semaphore(10)
+
+                async def _send_one(task: Dict[str, Any]):
+                    async with semaphore:
+                        try:
+                            result = await self._send_to_deployment(deployment_name, task)
+                            return {
                                 **result,
                                 "element_index": task.get("_element_index", -1),
                                 "ma_tieu_chi": task.get("_ma_tieu_chi", "unknown"),
                                 "model_name": model_name,
-                            }
-                        )
-                    except Exception as task_error:
-                        failed_elements.append(
-                            {
+                            }, None
+                        except Exception as task_error:
+                            return None, {
                                 "element_index": task.get("_element_index", -1),
                                 "ma_tieu_chi": task.get("_ma_tieu_chi", "unknown"),
                                 "model_name": model_name,
                                 "error": "prediction_failed",
                                 "error_details": str(task_error),
                             }
-                        )
+
+                send_tasks = [_send_one(task) for task in model_tasks]
+                send_results = await asyncio.gather(*send_tasks, return_exceptions=False)
+                for r, e in send_results:
+                    if r is not None:
+                        group_results.append(r)
+                    if e is not None:
+                        group_failed.append(e)
+
+                return group_results, group_failed
 
             except Exception as model_error:
-                # Model group failed - add all tasks to failed_elements
                 for task in model_tasks:
-                    failed_elements.append(
+                    group_failed.append(
                         {
                             "element_index": task.get("_element_index", -1),
                             "ma_tieu_chi": task.get("_ma_tieu_chi", "unknown"),
@@ -162,6 +166,16 @@ class ModelRouter:
                             "error_details": str(model_error),
                         }
                     )
+                return group_results, group_failed
+
+        group_coros = [
+            _process_model_group(model_name, model_tasks)
+            for model_name, model_tasks in tasks_by_model.items()
+        ]
+        group_outcomes = await asyncio.gather(*group_coros, return_exceptions=False)
+        for group_results, group_failed in group_outcomes:
+            results.extend(group_results)
+            failed_elements.extend(group_failed)
 
         return {
             "status": "partial_success" if results else "failed",
@@ -361,27 +375,31 @@ class ModelRouter:
         if not self.available_deployments:
             return None
 
+        # Take a snapshot of routing state to minimize time holding the lock
         with self._lock:
-            deployment, new_round_robin_index = (
-                self.deployment_selector.select_deployment(
-                    self.routing_strategy,
-                    model_name,
-                    self.available_deployments,
-                    self.deployment_loads,
-                    self.route_metrics,
-                    self.model_affinity,
-                    self.round_robin_index,
-                )
-            )
+            deployments_snapshot = list(self.available_deployments)
+            loads_snapshot = dict(self.deployment_loads)
+            metrics_snapshot = dict(self.route_metrics)
+            affinity_snapshot = dict(self.model_affinity)
+            rr_index_snapshot = self.round_robin_index
 
-            # Update round robin index
+        deployment, new_round_robin_index = self.deployment_selector.select_deployment(
+            self.routing_strategy,
+            model_name,
+            deployments_snapshot,
+            loads_snapshot,
+            metrics_snapshot,
+            affinity_snapshot,
+            rr_index_snapshot,
+        )
+
+        # Briefly lock to update shared mutable state
+        with self._lock:
             self.round_robin_index = new_round_robin_index
-
-            # Update model affinity for MODEL_AFFINITY strategy
             if self.routing_strategy == RoutingStrategy.MODEL_AFFINITY and deployment:
                 self.model_affinity[model_name] = deployment
 
-            return deployment
+        return deployment
 
     async def _send_to_deployment(
         self, deployment_name: str, request: Dict[str, Any]
@@ -389,7 +407,8 @@ class ModelRouter:
         """Send request to specific deployment"""
         try:
             # Increment load counter
-            with self._lock:
+            lock = self._load_locks[deployment_name]
+            with lock:
                 self.deployment_loads[deployment_name] += 1
 
             # Get deployment handle and send request
@@ -400,7 +419,8 @@ class ModelRouter:
 
         finally:
             # Decrement load counter
-            with self._lock:
+            lock = self._load_locks[deployment_name]
+            with lock:
                 self.deployment_loads[deployment_name] = max(
                     0, self.deployment_loads[deployment_name] - 1
                 )

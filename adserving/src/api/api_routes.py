@@ -17,7 +17,6 @@ from . import (
     exception_handlers,
     model_endpoints,
     prediction_endpoint,
-    tier_management_endpoints,
 )
 
 logger = get_logger()
@@ -65,7 +64,6 @@ def create_app(api_prefix: str = "") -> FastAPI:
     app.include_router(core_endpoints.router, tags=["Core"])
     app.include_router(prediction_endpoint.router, tags=["Prediction"])
     app.include_router(model_endpoints.router, tags=["Models"])
-    app.include_router(tier_management_endpoints.router, tags=["Tier Management"])
 
     return app
 
