@@ -7,10 +7,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import mlflow.pyfunc
 from ray import serve
 
-from adserving.src.mlflow_handler.mlflow_client import \
-    MLflowClient as WrappedMLflowClient
-from adserving.src.mlflow_handler.mlflow_parameter_updater import \
-    MLflowParameterUpdater
+from adserving.src.mlflow_handler.mlflow_client import (
+    MLflowClient as WrappedMLflowClient,
+)
+from adserving.src.mlflow_handler.mlflow_parameter_updater import MLflowParameterUpdater
 from adserving.src.utils.logger import get_logger
 
 
@@ -83,6 +83,34 @@ class PreloadedModelServer:
         loop.create_task(self._watch_production_models())
 
     # -------------------------- utils --------------------------
+
+    async def ready(self) -> bool:
+        """
+        Trả về True nếu deployment đã sẵn sàng phục vụ:
+        - Dựa trên danh sách model Production hiện có (qua _list_production).
+        - Có thể mở rộng: kiểm tra thêm cờ nội bộ (ví dụ self._initialized).
+        """
+        try:
+            # _list_production là method đã có sẵn (theo log các method khả dụng)
+            names = await self._list_production()  # nếu _list_production là async
+        except TypeError:
+            # Dự phòng nếu _list_production là sync
+            names = self._list_production()
+
+        # Sẵn sàng nếu gọi thành công và trả về danh sách (kể cả rỗng vẫn coi là OK)
+        return names is not None
+
+    async def list_models(self):
+        """
+        Trả về danh sách model Production (wrapper public).
+        - Hữu ích nếu code bên ngoài muốn gọi method public thay vì method private.
+        """
+        try:
+            names = await self._list_production()  # nếu _list_production là async
+        except TypeError:
+            names = self._list_production()
+
+        return names or []
 
     def _list_production(self) -> Dict[str, str]:
         try:
@@ -223,7 +251,6 @@ class PreloadedModelServer:
 
             except Exception as e:
                 self.logger.error(f"Watcher loop error: {e}")
-
 
     def _threshold_of(self, model_name: str) -> Optional[float]:
         return self.thresholds.get(model_name)

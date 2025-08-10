@@ -1,15 +1,21 @@
+"""Configuration classes for ML model serving system using dataclasses."""
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 
 @dataclass
 class ServeHTTPConfig:
+    """HTTP server configuration."""
+
     host: str = "0.0.0.0"
     port: int = 8000
 
 
 @dataclass
 class ServeAutoscalingConfig:
+    """Autoscaling configuration for serving."""
+
     min_replicas: int = 2
     max_replicas: int = 8
     target_num_ongoing_requests_per_replica: int = 12
@@ -17,12 +23,16 @@ class ServeAutoscalingConfig:
 
 @dataclass
 class ServeDeploymentConfig:
+    """Deployment resource configuration."""
+
     num_cpus: int = 1
     memory_mb: int = 2048
 
 
 @dataclass
 class ServeConfig:
+    """Overall serving configuration."""
+
     http: ServeHTTPConfig = field(default_factory=ServeHTTPConfig)
     autoscaling: ServeAutoscalingConfig = field(default_factory=ServeAutoscalingConfig)
     deployment: ServeDeploymentConfig = field(default_factory=ServeDeploymentConfig)
@@ -30,11 +40,15 @@ class ServeConfig:
 
 @dataclass
 class PreloadConfig:
+    """Model preloading configuration."""
+
     max_load_concurrency: int = 8
 
 
 @dataclass
 class WatcherConfig:
+    """Model watcher configuration."""
+
     interval_seconds: int = 60
     sanity_check_enabled: bool = False
     sanity_inputs: List[float] = field(default_factory=list)
@@ -42,6 +56,8 @@ class WatcherConfig:
 
 @dataclass
 class APIGroupConfig:
+    """API endpoint group configuration."""
+
     host: str = "0.0.0.0"
     port: int = 8001
     prefix: str = "/api/v1"
@@ -52,7 +68,7 @@ class APIGroupConfig:
 
 @dataclass
 class MLflowConfig:
-    """MLflow configuration"""
+    """MLflow integration configuration."""
 
     tracking_uri: str = "http://localhost:5000"
     registry_uri: Optional[str] = None
@@ -66,7 +82,7 @@ class MLflowConfig:
 
 @dataclass
 class RayConfig:
-    """Ray cluster configuration for hundreds of models"""
+    """Ray cluster configuration."""
 
     address: Optional[str] = None  # null for local mode
     runtime_env: Optional[Dict[str, Any]] = None
@@ -84,7 +100,7 @@ class RayConfig:
 
 @dataclass
 class MonitoringConfig:
-    """Monitoring configuration for hundreds of models"""
+    """Monitoring and metrics configuration."""
 
     collection_interval: int = 5  # More frequent collection
     optimization_interval: int = 60  # More frequent optimization
@@ -120,7 +136,7 @@ class MonitoringConfig:
 
 @dataclass
 class LoggingConfig:
-    """Logging configuration"""
+    """Logging system configuration."""
 
     log_level: str = "INFO"
     log_dir: str = "logs"
@@ -140,7 +156,7 @@ class LoggingConfig:
 
 @dataclass
 class SecurityConfig:
-    """Security configuration"""
+    """Security and authentication configuration."""
 
     enable_auth: bool = False
     api_key: Optional[str] = None

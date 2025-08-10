@@ -18,7 +18,7 @@ logger = get_logger()
 data_handler: Optional[DataHandler] = None
 service_start_time: datetime = datetime.now()
 
-# THÊM: Service readiness state (fallback khi Serve chưa sẵn sàng)
+# Service readiness state (fallback khi Serve chưa sẵn sàng)
 service_readiness: Dict[str, Any] = {
     "ready": False,
     "models_loaded": 0,

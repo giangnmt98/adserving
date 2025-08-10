@@ -7,10 +7,16 @@ classes and functions from the modular structure.
 
 # Import everything from the new modular structure
 from . import *
+
 # Maintain backward compatibility
-from .config_manager import (Config, _global_config, create_sample_config,
-                             get_config, load_config, set_config)
-from .system_configs import LoggingConfig, MonitoringConfig, SecurityConfig
+from .config_manager import (
+    Config,
+    _global_config,
+    create_sample_config,
+    get_config,
+    load_config,
+    set_config,
+)
 
 # REMOVED: Direct import that causes circular dependency
 

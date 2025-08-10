@@ -7,9 +7,12 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, validator
 
 from adserving.src.datahandler.validators import (
-    collect_and_validate_fn_fields, ensure_list_non_empty,
-    extract_ma_tieu_chi_with_errors, finalize_validated_list_with_errors,
-    validate_item_is_dict)
+    collect_and_validate_fn_fields,
+    ensure_list_non_empty,
+    extract_ma_tieu_chi_with_errors,
+    finalize_validated_list_with_errors,
+    validate_item_is_dict,
+)
 
 
 class PredictionRequest(BaseModel):
@@ -272,9 +275,9 @@ class PredictionError(BaseModel):
     @classmethod
     def from_prediction_failure(
         cls,
-        ma_tieu_chi: str,
-        fn_field: str,
-        error_message: str,
+        ma_tieu_chi,
+        fn_field,
+        error_message,
     ) -> "PredictionError":
         """Create PredictionError from prediction failure"""
         field_suffix = f".{fn_field}" if fn_field else ""

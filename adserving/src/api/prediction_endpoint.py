@@ -5,9 +5,10 @@ import uuid
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from ray import serve
 
+# NOTE: Import trực tiếp từ api_dependencies để tránh trùng module dẫn tới _ASYNC_RUNNER bị None
 from adserving.src.api.api_dependencies import get_input_handler
 from adserving.src.datahandler.data_handler import DataHandler
 from adserving.src.datahandler.models import APIResponse, PredictionRequest
@@ -62,7 +63,6 @@ def _parse_model_name(model_name: Optional[str]) -> Tuple[str, str]:
 @router.post("/predict", response_model=APIResponse)
 async def predict(
     request: PredictionRequest,
-    background_tasks: BackgroundTasks,
     handler: DataHandler = Depends(get_input_handler),
 ):
     req_id = str(uuid.uuid4())
@@ -86,9 +86,6 @@ async def predict(
             "failed": failed,
         }
 
-        if details:
-            print(details)
-            background_tasks.add_task(_persist_details_to_db, details)
 
         return await handler.format_response(
             request_id=req_id,
@@ -103,7 +100,6 @@ async def predict(
     except HTTPException:
         raise
     except Exception as e:
-        total_time = time.time() - start
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -217,7 +213,7 @@ def _process_failures(
     return failed
 
 
-def _process_anomalies(details: List[Dict[str, Any]]) -> List[Dict[str, List[str]]]:
+def _process_anomalies(details: List[Dict[str, Any]]):
     grouped_anomalies: Dict[str, set] = {}
     for item in details:
         if (
@@ -229,9 +225,13 @@ def _process_anomalies(details: List[Dict[str, Any]]) -> List[Dict[str, List[str
             mtc = item["ma_tieu_chi"]
             fld = item["fld_code"]
             grouped_anomalies.setdefault(mtc, set()).add(fld)
-
     return [
-        {"ma_tieu_chi": mtc, "list_anomaly": sorted(list(flds))}
+        {
+            "ma_tieu_chi": str(mtc),
+            "list_anomaly": (
+                [str(flds)] if isinstance(flds, str) else sorted([str(x) for x in flds])
+            ),
+        }
         for mtc, flds in grouped_anomalies.items()
     ]
 

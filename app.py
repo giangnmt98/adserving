@@ -9,7 +9,7 @@ from ray import serve
 from adserving.src.deployment.preloaded_model_server import PreloadedModelServer
 from adserving.src.utils.logger import get_logger
 
-from adserving.src.config.config_manager import get_config
+from adserving.src.config.config import get_config
 from adserving.src.api.prediction_endpoint import router as prediction_router
 from adserving.src.api.model_endpoints import router as model_router
 from adserving.src.api.core_endpoints import router as core_router

@@ -6,11 +6,11 @@ from pydantic import BaseModel
 from ray import serve
 
 from adserving.src.api.response_model import ModelInfoResponse
-from adserving.src.config.config_manager import get_config
-from adserving.src.mlflow_handler.mlflow_client import \
-    MLflowClient as WrappedMLflowClient
-from adserving.src.mlflow_handler.mlflow_parameter_updater import \
-    MLflowParameterUpdater
+from adserving.src.config.config import get_config
+from adserving.src.mlflow_handler.mlflow_client import (
+    MLflowClient as WrappedMLflowClient,
+)
+from adserving.src.mlflow_handler.mlflow_parameter_updater import MLflowParameterUpdater
 from adserving.src.utils.logger import get_logger
 
 logger = get_logger()

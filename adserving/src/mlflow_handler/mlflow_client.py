@@ -1,3 +1,4 @@
+# python
 """
 MLflow Client with Connection Pooling
 
@@ -7,9 +8,30 @@ This module provides an optimized MLflow client with connection pooling.
 from typing import Any, Dict, List, Optional
 
 from mlflow.tracking import MlflowClient
+from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from adserving.src.utils.logger import get_logger
+
+
+class PooledHTTPAdapter(HTTPAdapter):
+    """
+    HTTPAdapter với cấu hình connection pooling và retry cho requests.Session.
+
+    - pool_connections: số lượng connection pool.
+    - pool_maxsize: số kết nối tối đa trên mỗi pool.
+    - max_retries: chiến lược retry (urllib3.util.retry.Retry).
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.pool_connections = kwargs.pop("pool_connections", 10)
+        self.pool_maxsize = kwargs.pop("pool_maxsize", 20)
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs["maxsize"] = self.pool_maxsize
+        kwargs["block"] = False
+        return super().init_poolmanager(*args, **kwargs)
 
 
 class MLflowClient:
@@ -20,54 +42,45 @@ class MLflowClient:
         self.logger = get_logger()
         self.client = self._create_client(tracking_uri)
 
+    def _configure_pooling_for_client(self, client: MlflowClient) -> None:
+        """
+        Cấu hình connection pooling và retry cho session
+         nội bộ của MLflow client (nếu khả dụng).
+        Chỉ truy cập thuộc tính internal khi tồn tại,
+         và vô hiệu cảnh báo trong phạm vi hẹp.
+        """
+        # pylint: disable=protected-access
+        tracking_client = getattr(client, "_tracking_client", None)
+        if tracking_client is None:
+            return
+        session = getattr(tracking_client, "_session", None)
+        if session is None:
+            return
+        # pylint: enable=protected-access
+
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        pooled_adapter = PooledHTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=retry_strategy,
+        )
+        session.mount("http://", pooled_adapter)
+        session.mount("https://", pooled_adapter)
+
+        self.logger.info("MLflow client configured with connection pooling")
+
     def _create_client(self, tracking_uri: str) -> MlflowClient:
         """Create MLflow client with connection pooling optimization"""
         try:
             # Create MLflow client
             client = MlflowClient(tracking_uri=tracking_uri)
-
-            # Configure connection pooling for the underlying HTTP session
-            if hasattr(client, "_tracking_client") and hasattr(
-                client._tracking_client, "_session"
-            ):
-                session = client._tracking_client._session
-
-                # Configure retry strategy
-                retry_strategy = Retry(
-                    total=3,
-                    backoff_factor=0.1,
-                    status_forcelist=[429, 500, 502, 503, 504],
-                )
-
-                # Configure connection pooling
-                from requests.adapters import HTTPAdapter
-
-                class PooledHTTPAdapter(HTTPAdapter):
-                    def __init__(self, *args, **kwargs):
-                        self.pool_connections = kwargs.pop("pool_connections", 10)
-                        self.pool_maxsize = kwargs.pop("pool_maxsize", 20)
-                        super().__init__(*args, **kwargs)
-
-                    def init_poolmanager(self, *args, **kwargs):
-                        kwargs["maxsize"] = self.pool_maxsize
-                        kwargs["block"] = False
-                        return super().init_poolmanager(*args, **kwargs)
-
-                # Mount adapters with connection pooling
-                pooled_adapter = PooledHTTPAdapter(
-                    pool_connections=10, pool_maxsize=20, max_retries=retry_strategy
-                )
-
-                session.mount("http://", pooled_adapter)
-                session.mount("https://", pooled_adapter)
-
-                self.logger.info(
-                    "MLflow client configured with connection pooling "
-                    "(10 pools, 20 max connections)"
-                )
-
+            # Configure connection pooling (nếu session nội bộ khả dụng)
+            self._configure_pooling_for_client(client)
             return client
-
         except Exception as e:
             self.logger.warning(
                 f"Failed to configure connection pooling for MLflow client: {e}"
@@ -167,7 +180,7 @@ class MLflowClient:
             if not production_version:
                 return {}
 
-            parameters = {}
+            parameters: Dict[str, Any] = {}
 
             # Get parameters in priority order
             parameters.update(self._get_version_parameters(production_version))
@@ -202,8 +215,8 @@ class MLflowClient:
         )
         return production_version
 
-    def _get_version_parameters(self, production_version) -> Dict:
-        parameters = {}
+    def _get_version_parameters(self, production_version) -> Dict[str, Any]:
+        parameters: Dict[str, Any] = {}
         if hasattr(production_version, "tags") and production_version.tags:
             parameters.update(production_version.tags)
             self.logger.debug(
@@ -212,8 +225,8 @@ class MLflowClient:
             )
         return parameters
 
-    def _get_run_parameters(self, run_id: str) -> Dict:
-        parameters = {}
+    def _get_run_parameters(self, run_id: str) -> Dict[str, Any]:
+        parameters: Dict[str, Any] = {}
         try:
             run = self.client.get_run(run_id)
 
@@ -234,8 +247,10 @@ class MLflowClient:
 
         return parameters
 
-    def _get_model_parameters(self, model_name: str, existing_params: Dict) -> Dict:
-        parameters = {}
+    def _get_model_parameters(
+        self, model_name: str, existing_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        parameters: Dict[str, Any] = {}
         try:
             registered_model = self.client.get_registered_model(model_name)
             if hasattr(registered_model, "tags") and registered_model.tags:
@@ -261,12 +276,11 @@ class MLflowClient:
             model_name: Name of the model
 
         Returns:
-            Dict with threshold parameters
+            Float threshold value (0.0 nếu không tìm thấy hoặc không chuyển đổi được)
         """
         all_params = self.get_model_parameters_by_stage(model_name)
 
         # Extract threshold-related parameters
-        threshold_params = {}
         threshold_keys = [
             "threshold",
             "probability_threshold",
@@ -280,8 +294,7 @@ class MLflowClient:
         for key in threshold_keys:
             if key in all_params:
                 try:
-                    threshold_params[key] = float(all_params[key])
-                    threshold_value = threshold_params[key]
+                    threshold_value = float(all_params[key])
                 except (ValueError, TypeError):
                     self.logger.warning(
                         f"Could not convert {key}={all_params[key]}"

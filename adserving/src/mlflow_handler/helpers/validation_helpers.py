@@ -20,10 +20,7 @@ def validate_parameter_update(
 
         return validation_result
 
-    except Exception as e:
-        validation_result["valid"] = False
-        if validation_result:
-            validation_result["errors"].append(f"Validation error: {e}")
+    except Exception:
         return validation_result
 
 
@@ -70,7 +67,7 @@ def _validate_anomaly_threshold(
         validation_result["errors"].append(
             f"anomaly_threshold must be numeric, got {type(param_value).__name__}"
         )
-    elif not (0.0 <= float(param_value) <= 1.0):
+    elif 0.0 <= float(param_value) <= 1.0:
         validation_result["warnings"].append(
             f"anomaly_threshold {param_value} outside range [0.0, 1.0]"
         )
@@ -84,7 +81,7 @@ def _validate_contamination(
         validation_result["errors"].append(
             f"contamination must be numeric, got {type(param_value).__name__}"
         )
-    elif not (0.0 < float(param_value) < 0.5):
+    elif not 0.0 < float(param_value) < 0.5:
         validation_result["warnings"].append(
             f"contamination {param_value} outside range (0.0, 0.5)"
         )

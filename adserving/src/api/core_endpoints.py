@@ -9,11 +9,10 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from ray import serve
 
-from adserving.src.config.config_manager import get_config
+from adserving.src.config.config import get_config
 from adserving.src.utils.logger import get_logger
 
-from .api_dependencies import \
-    service_readiness  # THÊM: fallback trạng thái sẵn sàng
+from .api_dependencies import service_readiness  # THÊM: fallback trạng thái sẵn sàng
 from .api_dependencies import service_start_time
 from .response_model import HealthResponse, ServiceInfoResponse
 

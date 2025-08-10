@@ -10,7 +10,7 @@ ray:
   address:
 
   # Số CPU/GPU cho Ray (optional)
-  num_cpus: 14
+  num_cpus: 10
   num_gpus: 0
   # runtime_env: {} # tuỳ chọn
 
@@ -58,6 +58,58 @@ monitoring:
 
 security:
   enable_cors: true
+
+async_processing:
+  enabled: true             # Bật/tắt tích hợp async (fire-and-forget từ API)
+  default_model_name: "default_model"
+
+#  # Redis Streams (producer)
+#  redis:
+#    host: "127.0.0.1"
+#    port: 6379
+#    db: 0
+#    password: ""           # để trống nếu không dùng
+#    socket_timeout: 2.0
+#    socket_connect_timeout: 1.0
+#    retry_on_timeout: true
+#    connection_pool_max_connections: 32
+#    health_check_interval: 15
+#
+#  # Streams names & controls
+#  streams:
+#    training_data: "training_data"
+#    inference_results: "inference_results"
+#    batch_data: "batch_data"
+#    max_stream_length: 1000000
+#    trim_interval_seconds: 60
+#    monitoring_enabled: true
+#    monitoring_interval_seconds: 30
+#
+#  # Consumers/workers (chạy ở process/container riêng)
+#  consumer:
+#    group_name: "adserving_consumers"
+#    consumer_name_prefix: "worker"
+#    batch_size: 128
+#    block_time_ms: 100
+#    max_retries: 3
+#    retry_delay_seconds: 2
+#    processing_timeout_seconds: 30
+#    max_pending_messages: 10000
+#    health_check_interval: 30
+#    num_workers: 2
+#
+#  # PostgreSQL (asyncpg) cho DB layer
+#  database:
+#    host: "127.0.0.1"
+#    port: 5432
+#    name: "adserving"
+#    user: "postgres"
+#    password: "postgres"
+#    min_connections: 5
+#    max_connections: 20
+#    command_timeout: 60
+#    server_settings: {}
+
 
 api:
   # Host/port FastAPI (uvicorn)

@@ -8,10 +8,20 @@ from typing import Any, Dict, Optional, Union
 
 import yaml
 
-from .models import (APIGroupConfig, LoggingConfig, MLflowConfig,
-                     MonitoringConfig, PreloadConfig, RayConfig,
-                     SecurityConfig, ServeAutoscalingConfig, ServeConfig,
-                     ServeDeploymentConfig, ServeHTTPConfig, WatcherConfig)
+from .models import (
+    APIGroupConfig,
+    LoggingConfig,
+    MLflowConfig,
+    MonitoringConfig,
+    PreloadConfig,
+    RayConfig,
+    SecurityConfig,
+    ServeAutoscalingConfig,
+    ServeConfig,
+    ServeDeploymentConfig,
+    ServeHTTPConfig,
+    WatcherConfig,
+)
 
 
 @dataclass

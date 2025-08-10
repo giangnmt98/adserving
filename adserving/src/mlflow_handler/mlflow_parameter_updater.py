@@ -6,11 +6,15 @@ from typing import Any, Dict, List, Optional
 
 import mlflow
 
-from .helpers.history_helpers import (compare_parameter_versions,
-                                      get_model_version_parameters,
-                                      get_parameter_update_history)
+from .helpers.history_helpers import (
+    compare_parameter_versions,
+    get_model_version_parameters,
+    get_parameter_update_history,
+)
 from .helpers.model_version_helpers import (
-    create_model_version_from_run, transition_to_production_with_archive)
+    create_model_version_from_run,
+    transition_to_production_with_archive,
+)
 from .helpers.run_helpers import create_run_with_updated_parameters
 from .helpers.validation_helpers import validate_parameter_update
 
@@ -40,7 +44,7 @@ class MLflowParameterUpdater:
             )
 
             if not production_versions:
-                self.logger.error(f"No Production version found: {model_name}")
+                self.logger.error("No Production version found: %s", model_name)
                 return False
 
             current_version = production_versions[0]
@@ -48,8 +52,10 @@ class MLflowParameterUpdater:
             current_source = current_version.source
 
             self.logger.info(
-                f"Found Production v{current_version.version} "
-                f"for {model_name} (run: {current_run_id})"
+                "Found Production v%s for %s (run: %s)",
+                current_version.version,
+                model_name,
+                current_run_id,
             )
 
             # Create new run with updated parameters
@@ -89,14 +95,16 @@ class MLflowParameterUpdater:
 
             if success:
                 self.logger.debug(
-                    f"Successfully deployed v{new_version.version} "
-                    f"for {model_name} with updates: {parameter_updates}"
+                    "Successfully deployed v%s for %s with updates: %s",
+                    new_version.version,
+                    model_name,
+                    parameter_updates,
                 )
 
             return success
 
         except Exception as e:
-            self.logger.error(f"Error creating parameter version: {e}")
+            self.logger.error("Error creating parameter version: %s", e)
             return False
 
     def update_anomaly_threshold(
@@ -134,7 +142,7 @@ class MLflowParameterUpdater:
             )
 
             if target_model_version.current_stage == "Production":
-                self.logger.info(f"v{target_version} already in Production")
+                self.logger.info("v%s already in Production", target_version)
                 return True
 
             # Transition to Production
@@ -145,11 +153,11 @@ class MLflowParameterUpdater:
                 archive_existing_versions=True,
             )
 
-            self.logger.info(f"Rolled back {model_name} to v{target_version}")
+            self.logger.info("Rolled back %s to v%s", model_name, target_version)
             return True
 
         except Exception as e:
-            self.logger.error(f"Error rolling back to v{target_version}: {e}")
+            self.logger.error("Error rolling back to v%s: %s", target_version, e)
             return False
 
     def get_parameter_update_history(

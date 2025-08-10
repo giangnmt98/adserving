@@ -2,10 +2,14 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from adserving.src.config.config_manager import get_config
-from adserving.src.datahandler.models import (APIResponse, Metadata,
-                                              PredictionError,
-                                              PredictionRequest, RequestInfo)
+from adserving.src.config.config import get_config
+from adserving.src.datahandler.models import (
+    APIResponse,
+    Metadata,
+    PredictionError,
+    PredictionRequest,
+    RequestInfo,
+)
 from adserving.src.utils.logger import get_logger
 
 logger = get_logger()
@@ -52,9 +56,9 @@ class DataHandler:
         self,
         request_id: str,
         total_time: float,
-        ma_don_vi: str,
-        ma_bao_cao: str,
-        ky_du_lieu: str,
+        ma_don_vi,
+        ma_bao_cao,
+        ky_du_lieu,
         detailed_results: Dict[str, Any],
         validation_errors: Optional[List] = None,
     ) -> APIResponse:
@@ -217,8 +221,8 @@ class DataHandler:
         self, results_list: List[Dict[str, Any]], request_info: RequestInfo
     ) -> Tuple[Dict[str, List[str]], List[PredictionError]]:
         """Process results list with partial success support"""
-        criteria_groups = {}
-        prediction_errors = []
+        criteria_groups: Dict[str, List[str]] = {}
+        prediction_errors: List[PredictionError] = []
 
         for task_result in results_list:
             if task_result.get("status") != "success":
@@ -285,28 +289,24 @@ class DataHandler:
             return PredictionError.from_model_error(
                 ma_tieu_chi=ma_tieu_chi,
                 error_message="Model not found",
-                detail=f"No model available for criterion {ma_tieu_chi}",
             )
         elif "timeout" in error_message.lower():
             return PredictionError.from_prediction_failure(
                 ma_tieu_chi=ma_tieu_chi,
                 fn_field=fn_field,
                 error_message="Prediction timeout",
-                detail=f"Prediction timed out for criterion {ma_tieu_chi}",
             )
         elif "invalid_input" in error_message.lower():
             return PredictionError.from_prediction_failure(
                 ma_tieu_chi=ma_tieu_chi,
                 fn_field=fn_field,
                 error_message="Invalid input data",
-                detail=f"Input data validation failed for criterion {ma_tieu_chi}",
             )
         else:
             return PredictionError.from_prediction_failure(
                 ma_tieu_chi=ma_tieu_chi,
                 fn_field=fn_field,
                 error_message="Prediction failed",
-                detail=error_message,
             )
 
     def _create_error_response_with_validation(
@@ -330,7 +330,6 @@ class DataHandler:
                 PredictionError.from_model_error(
                     ma_tieu_chi="SYSTEM",
                     error_message="System error",
-                    detail=result.get("error", "Unknown system error"),
                 )
             )
 
@@ -349,5 +348,5 @@ class DataHandler:
         return APIResponse(
             metadata=metadata,
             request_info=request_info,
-            results=[],
+            results={"anomalies": [], "failed_elements": result_errors},
         )
