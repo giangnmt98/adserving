@@ -1,222 +1,117 @@
-"""
-Main FastAPI application entry point
-Enhanced with request body capture middleware for better validation error handling
-"""
+# Python
+import asyncio
+import os
 
-import sys
-from contextlib import asynccontextmanager
-from pathlib import Path
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from ray import serve
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from adserving.src.deployment.preloaded_model_server import PreloadedModelServer
 from adserving.src.utils.logger import get_logger
 
-# Configure basic logging
+from adserving.src.config.config_manager import get_config
+from adserving.src.api.prediction_endpoint import router as prediction_router
+from adserving.src.api.model_endpoints import router as model_router
+from adserving.src.api.core_endpoints import router as core_router
+from adserving.src.api import api_dependencies
+from adserving.src.api.exception_handlers import setup_exception_handlers
+from adserving.src.datahandler.data_handler import DataHandler
+
 logger = get_logger()
+app = FastAPI(title="Preloaded MLflow Serving", version="1.0.0")
 
+# Đăng ký exception handlers sớm
+setup_exception_handlers(app)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan events"""
-    # Startup
-    logger.info("Starting up Anomaly Detection API...")
+@app.on_event("startup")
+async def on_startup() -> None:
+    cfg = get_config()
 
+    # Cập nhật readiness: khởi tạo
+    api_dependencies.update_service_readiness(
+        ready=False, models_loaded=0, models_failed=0, initialization_complete=False
+    )
+
+    # Khởi động Ray Serve với http_options từ config (cho phép override qua env)
     try:
-        # Initialize any startup processes here
-        logger.info("Application startup completed successfully")
-
-        yield
-
-    except Exception as e:
-        logger.error(f"Error during application startup: {e}")
-        raise
-    finally:
-        # Shutdown
-        logger.info("Shutting down Anomaly Detection API...")
-        logger.info("Application shutdown completed")
-
-
-def create_app(api_prefix: str = "") -> FastAPI:
-    """Create and configure FastAPI application with enhanced middleware"""
-
-    try:
-        # Import required modules
-        from adserving.src.config.config_manager import get_config
-        from adserving.src.api import exception_handlers
-        from adserving.src.api import prediction_endpoint
-        from adserving.src.api import model_endpoints
-        from adserving.src.api import core_endpoints
-        from adserving.src.api import tier_management_endpoints
-
-        # Get application configuration
-        config = get_config()
-
-        # Create base FastAPI config
-        api_config = {
-            "title": "Anomaly Detection API",
-            "description": "Enhanced MLOps serving system with advanced validation error handling",
-            "version": config.api_version,
-            "lifespan": lifespan,
-            "docs_url": "/docs",
-            "redoc_url": "/redoc",
-            "openapi_url": "/openapi.json"
-        }
-
-        # Add root_path only if api_prefix is provided
-        if api_prefix and api_prefix.strip():
-            api_config["root_path"] = api_prefix
-            logger.info(f"API configured with prefix: {api_prefix}")
-
-        app = FastAPI(**api_config)
-
-        # Add CORS middleware - this should be added first
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=[
-                "http://localhost:3000",
-                "http://localhost:8000",
-                "http://127.0.0.1:3000",
-                "http://127.0.0.1:8000",
-                "*"  # In production, replace with specific origins
-            ],
-            allow_credentials=True,
-            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            allow_headers=["*"],
+        serve.start(
+            detached=True,
+            http_options={
+                "host": cfg.serve.http.host,
+                "port": cfg.serve.http.port,
+            },
         )
+    except RuntimeError as e:
+        if "already started" not in str(e):
+            raise
 
-        # Add custom request body capture middleware
-        # This must be added AFTER CORS but BEFORE other middleware
+    # Khởi tạo DI tối thiểu
+    input_handler = DataHandler()
 
-        logger.info("Request body capture middleware registered successfully")
+    api_dependencies.initialize_dependencies(handler=input_handler)
 
-        # Register exception handlers in order of specificity
-        # Most specific first, most general last
-        app.add_exception_handler(Exception, exception_handlers.general_exception_handler)
+    # Mount router theo prefix từ config
+    api_prefix = (cfg.api.prefix if getattr(cfg, "api", None) else None) or cfg.api_prefix or ""
+    app.include_router(prediction_router, prefix=api_prefix, tags=["Prediction"])
+    app.include_router(model_router, prefix=api_prefix, tags=["Model"])
+    app.include_router(core_router, prefix=api_prefix, tags=["Core"])
 
-        logger.info("Exception handlers registered successfully")
+    # Khởi chạy Serve app với tham số từ config (mlflow + preload + watcher)
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", cfg.mlflow.tracking_uri)
+    app_graph = PreloadedModelServer.bind(
+        tracking_uri=tracking_uri,
+        max_load_concurrency=cfg.preload.max_load_concurrency,
+        watcher_interval_seconds=cfg.watcher.interval_seconds,
+        sanity_check_enabled=cfg.watcher.sanity_check_enabled,
+        sanity_inputs=cfg.watcher.sanity_inputs,
+    )
+    serve.run(app_graph, name="preloaded_model_server")
 
-        # Include routers with their respective tags
-        app.include_router(core_endpoints.router, tags=["Core"])
-        app.include_router(prediction_endpoint.router, tags=["Prediction"])
-        app.include_router(model_endpoints.router, tags=["Models"])
-        app.include_router(tier_management_endpoints.router, tags=["Tier Management"])
+    handle = serve.get_app_handle("preloaded_model_server")
+    logger.info("Waiting for preloaded_model_server to be ready...")
 
-        logger.info("API routes registered successfully")
+    # Poll readiness
+    ready = False
+    models_loaded = 0
+    for _ in range(600):
+        try:
+            if await handle.ready.remote():
+                # Lấy danh sách model đã load
+                names = await handle.list_models.remote()
+                models_loaded = len(names or [])
+                ready = True
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
 
-        return app
+    if not ready:
+        # Không sẵn sàng trong thời gian chờ
+        api_dependencies.update_service_readiness(
+            ready=False,
+            models_loaded=models_loaded,
+            models_failed=0,
+            initialization_complete=False,
+        )
+        raise RuntimeError("Model server not ready in time.")
 
-    except ImportError as e:
-        logger.error(f"Failed to import required modules: {e}")
-        logger.error("Please ensure all dependencies are installed and modules are available")
-        raise
-    except Exception as e:
-        logger.error(f"Failed to create FastAPI application: {e}")
-        raise
-
+    # Sẵn sàng: cập nhật readiness
+    api_dependencies.update_service_readiness(
+        ready=True,
+        models_loaded=models_loaded,
+        models_failed=0,
+        initialization_complete=True,
+    )
 
 def main() -> None:
-    """Main entry point for the application"""
-    try:
-        # Ensure we're in the correct directory
-        current_dir = Path(__file__).parent
-        if not (current_dir / "adserving").exists():
-            logger.error("adserving package not found in current directory")
-            logger.error(f"Current directory: {current_dir}")
-            logger.error("Please run from the project root directory")
-            sys.exit(1)
-
-        # Import and run service using the main service module
-        from adserving.src.service import AnomalyDetectionServe
-
-        # Create service instance
-        service = AnomalyDetectionServe()
-
-        # Run the service (this will use the FastAPI app created by create_app)
-        service.run()
-
-    except ImportError as e:
-        logger.error(f"Failed to import service components: {e}")
-        logger.error("Ensure all dependencies are installed:")
-        logger.error("  pip install -r requirements.txt")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        logger.info("Application interrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"Failed to start Anomaly Detection Serve: {e}")
-        logger.exception("Full exception traceback:")
-        sys.exit(1)
-
-
-def run_development_server(
-    host: str = "0.0.0.0",
-    port: int = 8000,
-    reload: bool = True,
-    api_prefix: str = ""
-) -> None:
-    """Run development server with uvicorn"""
-    try:
-        import uvicorn
-
-        logger.info(f"Starting development server on {host}:{port}")
-        logger.info(f"Reload mode: {'enabled' if reload else 'disabled'}")
-
-        # Create the app
-        app = create_app(api_prefix)
-
-        # Run with uvicorn
-        uvicorn.run(
-            app,
-            host=host,
-            port=port,
-            reload=reload,
-            log_level="info",
-            access_log=True,
-            reload_dirs=["adserving"] if reload else None,
-            reload_excludes=["*.pyc", "*.pyo", "__pycache__"] if reload else None
-        )
-
-    except ImportError:
-        logger.error("uvicorn is not installed. Please install it:")
-        logger.error("  pip install uvicorn[standard]")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Failed to start development server: {e}")
-        sys.exit(1)
-
-
-# Create the app instance for ASGI servers (gunicorn, uvicorn, etc.)
-app = create_app()
-
-
-if __name__ == "__main__":
-    import argparse
-
-    # Command line argument parsing
-    parser = argparse.ArgumentParser(description="Anomaly Detection API Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
-    parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
-    parser.add_argument("--api-prefix", default="", help="API prefix path")
-    parser.add_argument("--dev", action="store_true", help="Run development server")
-    parser.add_argument("--production", action="store_true", help="Run production service")
-
-    args = parser.parse_args()
-
-    if args.dev:
-        # Run development server with uvicorn
-        logger.info("Starting in development mode...")
-        run_development_server(
-            host=args.host,
-            port=args.port,
-            reload=args.reload,
-            api_prefix=args.api_prefix
-        )
-    elif args.production:
-        # Run production service
-        logger.info("Starting in production mode...")
-        main()
-    else:
-        # Default: run the main service
-        logger.info("Starting Anomaly Detection Service...")
-        main()
+    cfg = get_config()
+    host = (cfg.api.host if getattr(cfg, "api", None) else None) or cfg.api_host
+    port = (cfg.api.port if getattr(cfg, "api", None) else None) or cfg.api_port
+    uvicorn.run(
+        "app:app",
+        host=host,
+        port=port,
+        reload=False,
+        workers=1,
+        log_level="info",
+    )

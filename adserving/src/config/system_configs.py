@@ -12,7 +12,7 @@ class MonitoringConfig:
 
     collection_interval: int = 5  # More frequent collection
     optimization_interval: int = 60  # More frequent optimization
-    history_size: int = 10000  # Increased history
+    history_size: int = 1000  # Increased history
     enable_gpu_monitoring: bool = True
     enable_model_level_monitoring: bool = True
     update_interval: int = 10
@@ -80,55 +80,3 @@ class SecurityConfig:
     allowed_model_patterns: List[str] = field(default_factory=lambda: ["*"])
     enable_audit_logging: bool = True
     session_timeout: int = 3600  # 1 hour
-
-
-@dataclass
-class PerformanceConfig:
-    """Performance optimization configuration"""
-
-    enable_performance_optimization: bool = True
-    optimization_interval: int = 300  # 5 minutes
-
-    # Batch processing
-    enable_dynamic_batching: bool = True
-    max_batch_size: int = 64
-    batch_timeout_ms: int = 100
-
-    # Caching
-    enable_response_caching: bool = True
-    response_cache_size: int = 10000
-    response_cache_ttl: int = 300  # 5 minutes
-
-    # Connection pooling
-    enable_connection_pooling: bool = True
-    max_connections: int = 1000
-    connection_timeout: int = 30
-
-    # Memory optimization
-    enable_memory_optimization: bool = True
-    gc_interval: int = 60  # Garbage collection interval
-    memory_threshold: float = 0.8  # Trigger cleanup at 80% memory
-
-
-@dataclass
-class BatchProcessingConfig:
-    """Batch processing configuration"""
-
-    enable_dynamic_batching: bool = True
-    max_batch_size: int = 256
-    batch_timeout_ms: int = 50
-    adaptive_batch_sizing: bool = True
-    enable_response_caching: bool = True
-    response_cache_size: int = 10000
-    response_cache_ttl: int = 300
-
-
-@dataclass
-class ConnectionPoolingConfig:
-    """Connection pooling configuration"""
-
-    enable_connection_pooling: bool = True
-    max_connections: int = 1000
-    connection_timeout: int = 30
-    pool_connections: int = 10
-    pool_maxsize: int = 20

@@ -1,446 +1,227 @@
-"""
-Configuration management and loading utilities
-Fixed circular import issues with lazy loading approach
-"""
+from __future__ import annotations
 
-import json
 import os
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
-from typing import Any, Dict, Optional, Union
-
+import json
 import yaml
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Any, Dict, List, Union, Optional
 
-from .base_types import ModelTier, ResourceSharingStrategy, RoutingStrategy
+
 from .core_configs import (
-    AnomalyDetectionConfig,
     MLflowConfig,
-    PooledDeploymentSettings,
     RayConfig,
-    ResourceSharingConfig,
-    RoutingConfig,
-    TieredLoadingConfig,
 )
-from .deployment_types import AutoscalingSettings, PooledResourceConfig
 from .system_configs import (
-    BatchProcessingConfig,
-    ConnectionPoolingConfig,
     LoggingConfig,
     MonitoringConfig,
-    PerformanceConfig,
     SecurityConfig,
 )
+@dataclass
+class ServeHTTPConfig:
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+
+@dataclass
+class ServeAutoscalingConfig:
+    min_replicas: int = 2
+    max_replicas: int = 8
+    target_num_ongoing_requests_per_replica: int = 12
+
+
+@dataclass
+class ServeDeploymentConfig:
+    num_cpus: int = 1
+    memory_mb: int = 2048
+
+
+@dataclass
+class ServeConfig:
+    http: ServeHTTPConfig = field(default_factory=ServeHTTPConfig)
+    autoscaling: ServeAutoscalingConfig = field(default_factory=ServeAutoscalingConfig)
+    deployment: ServeDeploymentConfig = field(default_factory=ServeDeploymentConfig)
+
+
+@dataclass
+class PreloadConfig:
+    max_load_concurrency: int = 8
+
+
+@dataclass
+class WatcherConfig:
+    interval_seconds: int = 60
+    sanity_check_enabled: bool = False
+    sanity_inputs: List[float] = field(default_factory=list)
+
+
+@dataclass
+class APIGroupConfig:
+    host: str = "0.0.0.0"
+    port: int = 8001
+    prefix: str = "/api/v1"
+    version: str = "v1.0"
+    docs: bool = True
+    openapi: bool = True
 
 
 @dataclass
 class Config:
-    """Configuration for Anomaly Detection Serve"""
+    """Configuration for simplified single deployment"""
 
-    # Core configurations
     mlflow: MLflowConfig = field(default_factory=MLflowConfig)
     ray: RayConfig = field(default_factory=RayConfig)
 
-    # Features
-    tiered_loading: TieredLoadingConfig = field(default_factory=TieredLoadingConfig)
-
-    # LAZY LOADING cho TierBasedDeploymentConfig để tránh circular import
-    tier_based_deployment: Optional[Any] = field(default=None)
-
-    resource_sharing: ResourceSharingConfig = field(
-        default_factory=ResourceSharingConfig
-    )
-    pooled_deployment: PooledDeploymentSettings = field(
-        default_factory=PooledDeploymentSettings
-    )
-    routing: RoutingConfig = field(default_factory=RoutingConfig)
-    anomaly_detection: AnomalyDetectionConfig = field(
-        default_factory=AnomalyDetectionConfig
-    )
-
-    # Performance configurations
-    batch_processing: BatchProcessingConfig = field(
-        default_factory=BatchProcessingConfig
-    )
-    connection_pooling: ConnectionPoolingConfig = field(
-        default_factory=ConnectionPoolingConfig
-    )
-
-    # System configurations
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
-    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
 
-    # System settings
-    max_workers: int = 16  # Increased for hundreds of models
-    enable_auto_deployment: bool = True
-    deployment_timeout: int = 600  # 10 minutes for large deployments
+    serve: ServeConfig = field(default_factory=ServeConfig)
+    preload: PreloadConfig = field(default_factory=PreloadConfig)
+    watcher: WatcherConfig = field(default_factory=WatcherConfig)
+    api: APIGroupConfig = field(default_factory=APIGroupConfig)
 
-    # API settings
+    # Back-compat fields
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    api_prefix: str = "/api/v1"  # Updated version
+    api_prefix: str = "/api/v1"
     api_version: str = "v1.0"
     enable_docs: bool = True
     enable_openapi: bool = True
 
     def __post_init__(self) -> None:
-        """Post-initialization validation and setup"""
-        # Initialize tier_based_deployment if None
-        if self.tier_based_deployment is None:
-            self.tier_based_deployment = self._create_default_tier_config()
-
         self._load_from_environment()
-        self._validate_config()
 
-    def _create_default_tier_config(self) -> Any:
-        """Create default tier-based deployment config with late import"""
-        try:
-            from ..deployment.resource_config import TierBasedDeploymentConfig
-            return TierBasedDeploymentConfig()
-        except ImportError as e:
-            print(f"Warning: Could not import TierBasedDeploymentConfig: {e}")
-            # Return a mock object với basic attributes
-            return self._create_mock_tier_config()
-
-    def _create_mock_tier_config(self) -> Any:
-        """Create mock tier config object nếu import fails"""
-
-        class MockTierBasedDeploymentConfig:
-            def __init__(self):
-                self.enable_tier_based_deployment = True
-                self.promotion_threshold = 20
-                self.demotion_threshold = 2
-                self.promotion_time_window = 300
-                self.demotion_time_window = 1800
-                self.enable_tier_aware_routing = True
-                self.prefer_higher_tier = True
-                self.routing_strategy = "least_loaded"
-                self.tier_routing_weights = {"hot": 1.0, "warm": 0.7, "cold": 0.3}
-                self.tier_monitoring_interval = 30
-                self.capacity_check_interval = 300
-                self.health_check_enabled = True
-                self.business_critical_models = None
-                self.tier_configs = {}
-
-        return MockTierBasedDeploymentConfig()
+        # Đồng bộ nhóm api -> các trường back-compat
+        if self.api:
+            self.api_host = self.api.host or self.api_host
+            self.api_port = self.api.port or self.api_port
+            self.api_prefix = self.api.prefix or self.api_prefix
+            self.api_version = self.api.version or self.api_version
+            self.enable_docs = bool(self.api.docs)
+            self.enable_openapi = bool(self.api.openapi)
 
     def _load_from_environment(self) -> None:
-        """Load configuration from environment variables"""
-        # MLflow settings
-        if os.getenv("MLFLOW_TRACKING_URI"):
-            self.mlflow.tracking_uri = os.getenv(
-                "MLFLOW_TRACKING_URI", self.mlflow.tracking_uri
-            )
+        """Load configuration from environment variables (ghi đè file config nếu có)"""
 
-        # Ray settings
-        if os.getenv("RAY_ADDRESS"):
-            self.ray.address = os.getenv("RAY_ADDRESS")
+        # MLflow
+        mlflow_uri = os.getenv("MLFLOW_TRACKING_URI")
+        if mlflow_uri:
+            self.mlflow.tracking_uri = mlflow_uri
 
-        # Security settings
-        if os.getenv("API_KEY"):
-            self.security.api_key = os.getenv("API_KEY")
-            self.security.enable_auth = True
-
-        # Performance settings
-        if os.getenv("MAX_WORKERS"):
+        # Ray
+        ray_addr = os.getenv("RAY_ADDRESS")
+        if ray_addr:
+            self.ray.address = ray_addr
+        # Dashboard host/port nếu có trong RayConfig
+        dash_host = os.getenv("RAY_DASHBOARD_HOST")
+        if dash_host and hasattr(self.ray, "dashboard_host"):
+            self.ray.dashboard_host = dash_host
+        dash_port = os.getenv("RAY_DASHBOARD_PORT")
+        if dash_port and hasattr(self.ray, "dashboard_port"):
             try:
-                self.max_workers = int(os.getenv("MAX_WORKERS", str(self.max_workers)))
+                self.ray.dashboard_port = int(dash_port)
             except ValueError:
-                pass  # Keep default value if conversion fails
+                pass
 
-    def _validate_config(self) -> None:
-        """Validate configuration settings"""
-        # Validate cache sizes
-        if self.tiered_loading.hot_cache_size <= 0:
-            raise ValueError("Hot cache size must be positive")
+        # FastAPI host/port (nhóm api mới)
+        api_host = os.getenv("FASTAPI_HOST")
+        if api_host:
+            self.api.host = api_host
+        api_port = os.getenv("FASTAPI_PORT")
+        if api_port:
+            try:
+                self.api.port = int(api_port)
+            except ValueError:
+                pass
 
-        if self.tiered_loading.warm_cache_size <= 0:
-            raise ValueError("Warm cache size must be positive")
+        # Back-compat env (cũ)
+        api_host_legacy = os.getenv("API_HOST")
+        if api_host_legacy:
+            self.api.host = api_host_legacy
+        api_port_legacy = os.getenv("API_PORT")
+        if api_port_legacy:
+            try:
+                self.api.port = int(api_port_legacy)
+            except ValueError:
+                pass
 
-        # Validate resource settings
-        if self.pooled_deployment.pool_resource_config.num_cpus <= 0:
-            raise ValueError("CPU count must be positive")
-
-        # Validate autoscaling settings
-        autoscaling = self.pooled_deployment.autoscaling_config
-        if autoscaling.min_replicas > autoscaling.max_replicas:
-            raise ValueError("Min replicas cannot exceed max replicas")
-
-        # Validate monitoring thresholds
-        for threshold_name, value in self.monitoring.alert_thresholds.items():
-            if not 0 <= value <= 100 and "percent" in threshold_name:
-                raise ValueError(
-                    f"Percentage threshold {threshold_name} must be between 0 and 100"
-                )
+        # Serve HTTP host/port
+        serve_http_host = os.getenv("SERVE_HTTP_HOST")
+        if serve_http_host:
+            self.serve.http.host = serve_http_host
+        serve_http_port = os.getenv("SERVE_HTTP_PORT")
+        if serve_http_port:
+            try:
+                self.serve.http.port = int(serve_http_port)
+            except ValueError:
+                pass
 
     @classmethod
     def from_file(cls, config_path: Union[str, Path]) -> "Config":
-        """Load configuration from file"""
         config_path = Path(config_path)
-
         if not config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
-
         with open(config_path, "r", encoding="utf-8") as f:
             if config_path.suffix.lower() in [".yaml", ".yml"]:
                 data = yaml.safe_load(f)
             elif config_path.suffix.lower() == ".json":
                 data = json.load(f)
             else:
-                raise ValueError(
-                    f"Unsupported configuration file format: {config_path.suffix}"
-                )
+                raise ValueError(f"Unsupported configuration file format: {config_path.suffix}")
         return cls.from_dict(data)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
-        """Create configuration from dictionary"""
-        config_data = {}
+        config_data: Dict[str, Any] = {}
 
-        for key, value in data.items():
-            if not isinstance(value, dict):
-                if key not in ["model_cache_size", "model_update_interval"]:
-                    config_data[key] = value
+        allowed_scalar_top_level = {
+            "api_host", "api_port", "api_prefix", "api_version", "enable_docs", "enable_openapi",
+        }
+
+        def _wrap(d: Dict[str, Any], t):
+            try:
+                return t(**(d or {}))
+            except Exception:
+                return t()
+
+        for key, value in (data or {}).items():
+            if isinstance(value, dict):
+                if key == "mlflow":
+                    config_data["mlflow"] = _wrap(value, MLflowConfig)
+                elif key == "ray":
+                    config_data["ray"] = _wrap(value, RayConfig)
+                elif key == "monitoring":
+                    config_data["monitoring"] = _wrap(value, MonitoringConfig)
+                elif key == "logging":
+                    config_data["logging"] = _wrap(value, LoggingConfig)
+                elif key == "security":
+                    config_data["security"] = _wrap(value, SecurityConfig)
+                elif key == "serve":
+                    autoscaling = _wrap(value.get("autoscaling", {}), ServeAutoscalingConfig)
+                    deployment = _wrap(value.get("deployment", {}), ServeDeploymentConfig)
+                    http = _wrap(value.get("http", {}), ServeHTTPConfig)
+                    config_data["serve"] = ServeConfig(http=http, autoscaling=autoscaling, deployment=deployment)
+                elif key == "preload":
+                    config_data["preload"] = _wrap(value, PreloadConfig)
+                elif key == "watcher":
+                    config_data["watcher"] = _wrap(value, WatcherConfig)
+                elif key == "api":
+                    config_data["api"] = _wrap(value, APIGroupConfig)
                 continue
 
-            config_handler = {
-                "mlflow": cls._handle_mlflow_config,
-                "ray": cls._handle_ray_config,
-                "tiered_loading": cls._handle_tiered_loading_config,
-                "tier_based_deployment": cls._handle_tier_based_deployment_config,
-                "resource_sharing": cls._handle_resource_sharing_config,
-                "pooled_deployment": cls._handle_pooled_deployment_config,
-                "deployment": cls._handle_legacy_deployment_config,
-                "routing": cls._handle_routing_config,
-                "monitoring": cls._handle_monitoring_config,
-                "logging": cls._handle_logging_config,
-                "security": cls._handle_security_config,
-                "performance": cls._handle_performance_config,
-                "anomaly_detection": cls._handle_anomaly_detection_config,
-                "batch_processing": cls._handle_batch_processing_config,
-                "connection_pooling": cls._handle_connection_pooling_config,
-            }
-
-            if key in config_handler:
-                config_data.update(config_handler[key](value))
+            if key in allowed_scalar_top_level:
+                config_data[key] = value
 
         return cls(**config_data)
 
-    @classmethod
-    def _handle_mlflow_config(cls, value: Dict) -> Dict:
-        return {"mlflow": MLflowConfig(**value)}
-
-    @classmethod
-    def _handle_ray_config(cls, value: Dict) -> Dict:
-        return {"ray": RayConfig(**value)}
-
-    @classmethod
-    def _handle_tiered_loading_config(cls, value: Dict) -> Dict:
-        return {"tiered_loading": TieredLoadingConfig(**value)}
-
-    @classmethod
-    def _handle_tier_based_deployment_config(cls, value: Dict) -> Dict:
-        """Handle tier-based deployment configuration with lazy import và error handling"""
-        try:
-            # LAZY IMPORT inside method
-            from ..deployment.resource_config import (
-                TierBasedDeploymentConfig,
-                TierResourceConfig,
-                BusinessCriticalModelsConfig,
-            )
-
-            # Deep copy để tránh modify original dict
-            import copy
-
-            config_data = copy.deepcopy(value)
-
-            # Process tier_configs if present
-            if "tier_configs" in config_data:
-                tier_configs = {}
-                for tier_name, tier_config in config_data["tier_configs"].items():
-                    if isinstance(tier_config, dict):
-                        # Ensure tier field is set
-                        if "tier" not in tier_config:
-                            tier_config["tier"] = tier_name
-
-                        try:
-                            tier_configs[tier_name] = TierResourceConfig(**tier_config)
-                        except Exception as e:
-                            print(
-                                f"Warning: Error creating TierResourceConfig for {tier_name}: {e}"
-                            )
-                            # Keep original dict nếu TierResourceConfig fails
-                            tier_configs[tier_name] = tier_config
-                    else:
-                        tier_configs[tier_name] = tier_config
-
-                config_data["tier_configs"] = tier_configs
-
-            # Process business_critical_models if present
-            if "business_critical_models" in config_data and isinstance(
-                config_data["business_critical_models"], dict
-            ):
-                try:
-                    config_data["business_critical_models"] = (
-                        BusinessCriticalModelsConfig(
-                            **config_data["business_critical_models"]
-                        )
-                    )
-                except Exception as e:
-                    print(f"Warning: Error creating BusinessCriticalModelsConfig: {e}")
-                    # Keep original dict nếu BusinessCriticalModelsConfig fails
-
-            # Create TierBasedDeploymentConfig
-            try:
-                tier_config = TierBasedDeploymentConfig(**config_data)
-                return {"tier_based_deployment": tier_config}
-            except Exception as e:
-                print(f"Warning: Error creating TierBasedDeploymentConfig: {e}")
-                # Return mock object nếu creation fails
-                return {
-                    "tier_based_deployment": cls._create_mock_tier_config_from_dict(
-                        config_data
-                    )
-                }
-
-        except ImportError as e:
-            print(f"Warning: Could not import TierBasedDeploymentConfig: {e}")
-            return {
-                "tier_based_deployment": cls._create_mock_tier_config_from_dict(value)
-            }
-
-    @classmethod
-    def _create_mock_tier_config_from_dict(cls, config_data: Dict) -> Any:
-        """Create mock tier config từ dictionary data"""
-
-        class MockTierBasedDeploymentConfig:
-            def __init__(self, data: Dict):
-                # Set attributes từ config data
-                self.enable_tier_based_deployment = data.get(
-                    "enable_tier_based_deployment", True
-                )
-                self.promotion_threshold = data.get("promotion_threshold", 20)
-                self.demotion_threshold = data.get("demotion_threshold", 2)
-                self.promotion_time_window = data.get("promotion_time_window", 300)
-                self.demotion_time_window = data.get("demotion_time_window", 1800)
-                self.enable_tier_aware_routing = data.get(
-                    "enable_tier_aware_routing", True
-                )
-                self.prefer_higher_tier = data.get("prefer_higher_tier", True)
-                self.routing_strategy = data.get("routing_strategy", "least_loaded")
-                self.tier_routing_weights = data.get(
-                    "tier_routing_weights", {"hot": 1.0, "warm": 0.7, "cold": 0.3}
-                )
-                self.tier_monitoring_interval = data.get("tier_monitoring_interval", 30)
-                self.capacity_check_interval = data.get("capacity_check_interval", 300)
-                self.health_check_enabled = data.get("health_check_enabled", True)
-                self.business_critical_models = data.get("business_critical_models", {})
-                self.tier_configs = data.get("tier_configs", {})
-
-        return MockTierBasedDeploymentConfig(config_data)
-
-    @classmethod
-    def _handle_resource_sharing_config(cls, value: Dict) -> Dict:
-        if "strategy" in value and isinstance(value["strategy"], str):
-            try:
-                value["strategy"] = ResourceSharingStrategy(value["strategy"])
-            except ValueError:
-                value["strategy"] = ResourceSharingStrategy.GPU_SHARED
-        return {"resource_sharing": ResourceSharingConfig(**value)}
-
-    @classmethod
-    def _handle_pooled_deployment_config(cls, value: Dict) -> Dict:
-        if "pool_resource_config" in value:
-            value["pool_resource_config"] = PooledResourceConfig(
-                **value["pool_resource_config"]
-            )
-        if "autoscaling_config" in value:
-            value["autoscaling_config"] = AutoscalingSettings(
-                **value["autoscaling_config"]
-            )
-        return {"pooled_deployment": PooledDeploymentSettings(**value)}
-
-    @classmethod
-    def _handle_legacy_deployment_config(cls, value: Dict) -> Dict:
-        pooled_config = {}
-
-        if "resource_config" in value:
-            resource_config = value["resource_config"]
-            pooled_config["pool_resource_config"] = PooledResourceConfig(
-                num_cpus=resource_config.get("num_cpus", 1.0),
-                num_gpus=resource_config.get("num_gpus", 0.0),
-                memory=resource_config.get("memory", 1024),
-                object_store_memory=resource_config.get("object_store_memory", 512),
-            )
-
-        if "autoscaling" in value:
-            autoscaling = value["autoscaling"]
-            pooled_config["autoscaling_config"] = AutoscalingSettings(
-                min_replicas=autoscaling.get("min_replicas", 2),
-                max_replicas=autoscaling.get("max_replicas", 50),
-                target_num_ongoing_requests_per_replica=autoscaling.get(
-                    "target_num_ongoing_requests_per_replica", 2
-                ),
-                metrics_interval_s=autoscaling.get("metrics_interval_s", 10.0),
-                look_back_period_s=autoscaling.get("look_back_period_s", 30.0),
-                smoothing_factor=autoscaling.get("smoothing_factor", 1.0),
-            )
-
-        return {"pooled_deployment": PooledDeploymentSettings(**pooled_config)}
-
-    @classmethod
-    def _handle_routing_config(cls, value: Dict) -> Dict:
-        if "strategy" in value and isinstance(value["strategy"], str):
-            try:
-                strategy_value = value["strategy"]
-                if hasattr(RoutingStrategy, strategy_value.upper()):
-                    value["strategy"] = getattr(RoutingStrategy, strategy_value.upper())
-                else:
-                    value["strategy"] = RoutingStrategy.LEAST_LOADED
-            except (ValueError, AttributeError):
-                value["strategy"] = RoutingStrategy.LEAST_LOADED
-        return {"routing": RoutingConfig(**value)}
-
-    @classmethod
-    def _handle_monitoring_config(cls, value: Dict) -> Dict:
-        return {"monitoring": MonitoringConfig(**value)}
-
-    @classmethod
-    def _handle_logging_config(cls, value: Dict) -> Dict:
-        return {"logging": LoggingConfig(**value)}
-
-    @classmethod
-    def _handle_security_config(cls, value: Dict) -> Dict:
-        return {"security": SecurityConfig(**value)}
-
-    @classmethod
-    def _handle_performance_config(cls, value: Dict) -> Dict:
-        return {"performance": PerformanceConfig(**value)}
-
-    @classmethod
-    def _handle_anomaly_detection_config(cls, value: Dict) -> Dict:
-        return {"anomaly_detection": AnomalyDetectionConfig(**value)}
-
-    @classmethod
-    def _handle_batch_processing_config(cls, value: Dict) -> Dict:
-        return {"batch_processing": BatchProcessingConfig(**value)}
-
-    @classmethod
-    def _handle_connection_pooling_config(cls, value: Dict) -> Dict:
-        return {"connection_pooling": ConnectionPoolingConfig(**value)}
-
     def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary"""
         return asdict(self)
 
     def to_file(self, config_path: Union[str, Path], format: str = "yaml") -> None:
-        """Save configuration to file"""
         config_path = Path(config_path)
         config_path.parent.mkdir(parents=True, exist_ok=True)
-
         data = self.to_dict()
-
         with open(config_path, "w", encoding="utf-8") as f:
             if format.lower() in ["yaml", "yml"]:
                 yaml.dump(data, f, default_flow_style=False, indent=2)
@@ -449,63 +230,21 @@ class Config:
             else:
                 raise ValueError(f"Unsupported format: {format}")
 
-    def get_model_tier_config(self, model_name: str) -> str:
-        """Get tier configuration for a specific model"""
-        # This could be extended to load from a model tier configuration file
-        # For now, return default tier
-        return ModelTier.WARM
-
     def get_ray_init_config(self) -> Dict[str, Any]:
-        """Get Ray initialization configuration"""
         config: Dict[str, Any] = {
             "address": self.ray.address,
             "dashboard_host": self.ray.dashboard_host,
             "dashboard_port": self.ray.dashboard_port,
         }
-
-        if self.ray.object_store_memory:
+        if getattr(self.ray, "object_store_memory", None):
             config["object_store_memory"] = self.ray.object_store_memory
-
         if self.ray.num_cpus is not None:
             config["num_cpus"] = self.ray.num_cpus
-
         if self.ray.num_gpus is not None:
             config["num_gpus"] = self.ray.num_gpus
-
         if self.ray.runtime_env:
             config["runtime_env"] = self.ray.runtime_env
-
         return config
-
-    def has_tier_based_deployment(self) -> bool:
-        """Check if tier-based deployment is enabled and properly configured"""
-        if self.tier_based_deployment is None:
-            return False
-
-        # Check if it's mock object hoặc real object
-        return hasattr(
-            self.tier_based_deployment, "enable_tier_based_deployment"
-        ) and getattr(self.tier_based_deployment, "enable_tier_based_deployment", False)
-
-    def get_tier_based_deployment_config(self) -> Any:
-        """Get tier-based deployment config với fallback"""
-        if self.tier_based_deployment is None:
-            self.tier_based_deployment = self._create_default_tier_config()
-        return self.tier_based_deployment
-
-    def __str__(self) -> str:
-        """String representation of configuration"""
-        tier_enabled = self.has_tier_based_deployment()
-        return (
-            f"Config(tiered_loading={self.tiered_loading.enable_tiered_loading}, "
-            f"tier_based_deployment={tier_enabled}, "
-            f"resource_sharing={self.resource_sharing.strategy.value}, "
-            f"pools={self.pooled_deployment.default_pool_count})"
-        )
-
-    def __repr__(self) -> str:
-        """Detailed representation of configuration"""
-        return self.__str__()
 
 
 # Global configuration instance

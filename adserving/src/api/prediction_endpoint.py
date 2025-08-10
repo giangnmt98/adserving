@@ -1,170 +1,243 @@
-"""
-Enhanced Prediction Endpoint with Single Element Error Handling
-"""
-
+# Python
+import math
 import time
 import uuid
 import warnings
-from typing import Dict
+from typing import Any, Dict, List, Tuple, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from ray import serve
 
 from adserving.src.datahandler.data_handler import DataHandler
 from adserving.src.datahandler.models import APIResponse, PredictionRequest
-from adserving.src.monitoring.model_monitor import ModelMonitor
-from adserving.src.router.model_name_extractor import ModelNameExtractor
-from adserving.src.utils.logger import get_logger
-from .api_dependencies import (
+from adserving.src.api.api_dependencies import (
     get_input_handler,
-    get_monitor,
-    get_tier_orchestrator,
+)
+from adserving.src.deployment.request_processor import RequestProcessor
+from adserving.src.utils.logger import get_logger
+
+warnings.filterwarnings(
+    "ignore", category=UserWarning, module="pydantic.type_adapter"
 )
 
-warnings.filterwarnings("ignore", category=UserWarning, module="pydantic.type_adapter")
-
 logger = get_logger()
-
 router = APIRouter()
 
+_HANDLE: Optional[Any] = None
 
-def _extract_detailed_model_info(request_data: Dict) -> Dict:
-    """Extract detailed information for model identification"""
-    info = {
-        "ma_don_vi": request_data.get("ma_don_vi", "UNKNOWN"),
-        "ma_bao_cao": request_data.get("ma_bao_cao", "UNKNOWN"),
-        "ky_du_lieu": request_data.get("ky_du_lieu", "UNKNOWN"),
-        "data_elements": [],
-    }
 
-    data_list = request_data.get("data", [])
-    for element in data_list:
-        element_info = {
-            "ma_tieu_chi": element.get("ma_tieu_chi", "UNKNOWN"),
-            "fn_fields": [k for k in element.keys() if k.startswith("FN")],
-            "fn_count": len([k for k in element.keys() if k.startswith("FN")]),
-        }
-        info["data_elements"].append(element_info)
+async def _persist_details_to_db(details: List[Dict[str, Any]]) -> None:
+    # TODO: triển khai lưu nền vào DB / queue
+    pass
 
-    info["total_elements"] = len(data_list)
-    info["is_single_element"] = len(data_list) == 1
 
-    return info
+def _float_or_error(v: Any) -> Tuple[bool, Optional[float], str]:
+    try:
+        fv = float(v)
+        if math.isnan(fv):
+            return False, None, "Giá trị là NaN."
+        return True, fv, ""
+    except Exception:
+        return False, None, "Giá trị không thể chuyển sang float."
+
+
+def _get_handle() -> Any:
+    global _HANDLE
+    if _HANDLE is None:
+        _HANDLE = serve.get_app_handle("preloaded_model_server")
+    return _HANDLE
+
+
+def _parse_model_name(model_name: Optional[str]) -> Tuple[str, str]:
+    """
+    Tách (ma_tieu_chi, fld_code) từ model_name: <ma_don_vi>_<ma_bao_cao>_<ma_tieu_chi>_<FNxx>
+    """
+    if not model_name or not isinstance(model_name, str):
+        return "", ""
+    parts = model_name.split("_")
+    if len(parts) < 4:
+        return "", ""
+    fld_code = parts[-1]
+    ma_tieu_chi = "_".join(parts[2:-1]) if len(parts) > 3 else ""
+    return ma_tieu_chi, fld_code
 
 
 @router.post("/predict", response_model=APIResponse)
 async def predict(
     request: PredictionRequest,
+    background_tasks: BackgroundTasks,
     handler: DataHandler = Depends(get_input_handler),
-    monitor: ModelMonitor = Depends(get_monitor),
 ):
     """
-    Enhanced prediction endpoint with single element error handling.
-
-    Properly handles cases where:
-    - Single data element doesn't match any model
-    - Multiple elements with some missing models
-    - Model name extraction failures
-
-    Example request:
+    Response:
     {
-        "ma_don_vi": "UBND.0019",
-        "ma_bao_cao": "10628953",
-        "ky_du_lieu": "2025-07-10",
-        "data": [
-            {
-                "ma_tieu_chi": "CT_TONGCONG",
-                "FN01": 1.23,
-                "FN02": 45.6,
-                "FN03": 22,
-                "FN4": 63.14
-            }
-        ]
+      status,
+      anomalies: [{ma_tieu_chi, list_anomaly}],
+      failed: [{ma_tieu_chi, column, error_message}],
+      (details: [...])  // tuỳ chọn, có thể bỏ để tối ưu latency
     }
     """
-    request_id = str(uuid.uuid4())
-    start_time = time.time()
-
-    # Extract request info for detailed error handling
-    request_dict = request.model_dump() if hasattr(request, "dict") else request
-    model_info = _extract_detailed_model_info(request_dict)
-    logger.info(
-        f"Processing prediction request {request_id}: "
-        f"{model_info['total_elements']} elements, "
-        f"single_element={model_info['is_single_element']}"
-    )
+    req_id = str(uuid.uuid4())
+    start = time.time()
 
     try:
-        # Process and validate input
-        processed_request = await handler.process_request(request)
-        # Handle tier-based deployment
-        result = await _handle_tier_based_prediction(
-            processed_request, request_id, start_time, model_info
+        # Các trường top-level (ma_don_vi, ma_bao_cao, ky_du_lieu) đã được Pydantic validate:
+        # nếu thiếu/sai kiểu -> FastAPI sẽ trả HTTP 400 ngay.
+        raw_req: Dict[str, Any] = (
+            request.model_dump() if hasattr(request, "model_dump") else dict(request)
         )
-        model_name = result.get("model_name", "unknown")
 
-        # Record success metrics
-        inference_time = time.time() - start_time
-        success = result.get("status") == "success"
+        # Xử lý/nắn lỗi validate ở cấp phần tử (data[..]) để trả về failed trong response
+        processed = await handler.process_request(request)
 
-        if hasattr(monitor, "metrics_collector"):
-            monitor.metrics_collector.record_model_request(
-                model_name=model_name, response_time=inference_time, success=success
+        # Chuẩn hoá input thành prediction_tasks
+        rp = RequestProcessor()
+        try:
+            prediction_tasks = rp.prepare_input_data(raw_req)
+        except HTTPException:
+            # Giữ nguyên HTTP 400 của các validate cứng (ví dụ thiếu/invalid ma_tieu_chi)
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # Build tasks dạng float
+        tasks: List[Dict[str, Any]] = []
+        failed_local: List[Dict[str, Any]] = []
+        for idx, t in enumerate(prediction_tasks):
+            m = t.get("model_name")
+            df = t.get("input_data")
+            if m is None or df is None:
+                mtc, fld = _parse_model_name(m)
+                failed_local.append(
+                    {
+                        "element_index": idx,
+                        "model_name": m,
+                        "ma_tieu_chi": mtc,
+                        "fld_code": fld,
+                        "error": "invalid_task",
+                        "error_details": "Thiếu model_name hoặc input_data.",
+                    }
+                )
+                continue
+            try:
+                val = df["gia_tri"].iloc[0]
+            except Exception:
+                mtc, fld = _parse_model_name(m)
+                failed_local.append(
+                    {
+                        "element_index": idx,
+                        "model_name": m,
+                        "ma_tieu_chi": mtc,
+                        "fld_code": fld,
+                        "error": "missing_value",
+                        "error_details": "Không tìm thấy trường gia_tri.",
+                    }
+                )
+                continue
+
+            ok_val, fv, msg = _float_or_error(val)
+            if not ok_val or fv is None:
+                mtc, fld = _parse_model_name(m)
+                failed_local.append(
+                    {
+                        "element_index": idx,
+                        "model_name": m,
+                        "ma_tieu_chi": mtc,
+                        "fld_code": fld,
+                        "error": "invalid_value",
+                        "error_details": msg,
+                    }
+                )
+                continue
+
+            tasks.append({"model_name": str(m), "value": float(fv)})
+
+        # Gọi Serve để lọc model + predict
+        handle = _get_handle()
+        result_obj = await handle.validate_and_predict.remote(tasks)
+        details: List[Dict[str, Any]] = (result_obj or {}).get("results", [])
+        failed_remote: List[Dict[str, Any]] = (result_obj or {}).get(
+            "failed_elements", []
+        )
+
+        # Hợp nhất lỗi local và remote để tạo "failed" [{ma_tieu_chi, column, error_message}]
+        failed_all_raw = failed_local + failed_remote
+
+        def _infer_column(it: Dict[str, Any]) -> str:
+            c = (it.get("fld_code") or "").strip()
+            if c:
+                return c
+            mtc2, fld2 = _parse_model_name(it.get("model_name"))
+            return fld2 or "UNKNOWN"
+
+        failed: List[Dict[str, str]] = []
+        for it in failed_all_raw:
+            mtc = (it.get("ma_tieu_chi") or "").strip() or "UNKNOWN"
+            col = _infer_column(it)
+            msg = (
+                it.get("error_details")
+                or it.get("error_message")
+                or it.get("error")
+                or "unknown_error"
+            )
+            failed.append(
+                {
+                    "ma_tieu_chi": mtc,
+                    "column": col,
+                    "error_message": str(msg),
+                }
             )
 
-        # Format and return response
-        if (
-            "_validation_errors" not in processed_request
-            or processed_request["_validation_errors"] is None
-        ):
-            response = await handler.format_response(
-                request_id=request_id,
-                total_time=inference_time,
-                ma_don_vi=request_dict["ma_don_vi"],
-                ma_bao_cao=request_dict["ma_bao_cao"],
-                ky_du_lieu=request_dict["ky_du_lieu"],
-                detailed_results=result,
-                validation_errors=[],
-            )
-        else:
-            response = await handler.format_response(
-                request_id=request_id,
-                total_time=inference_time,
-                ma_don_vi=request_dict["ma_don_vi"],
-                ma_bao_cao=request_dict["ma_bao_cao"],
-                ky_du_lieu=request_dict["ky_du_lieu"],
-                detailed_results=result,
-                validation_errors=processed_request["_validation_errors"],
-            )
-        return response
+        # Gom anomalies theo ma_tieu_chi: chỉ giữ FNxx bất thường
+        grouped_anomalies: Dict[str, set] = {}
+        for item in details:
+            if (
+                item.get("status") == "success"
+                and item.get("is_anomaly") is True
+                and item.get("ma_tieu_chi")
+                and item.get("fld_code")
+            ):
+                mtc = item["ma_tieu_chi"]
+                fld = item["fld_code"]
+                grouped_anomalies.setdefault(mtc, set()).add(fld)
+        anomalies = [
+            {"ma_tieu_chi": mtc, "list_anomaly": sorted(list(flds))}
+            for mtc, flds in grouped_anomalies.items()
+        ]
+
+        total_time = time.time() - start
+        status = (
+            "success"
+            if details and not failed
+            else ("partial_success" if details else "error")
+        )
+
+        # Response gọn: anomalies + failed (details lưu nền)
+        response_payload = {
+            "status": status,
+            "anomalies": anomalies,
+            "failed": failed,  # [{ma_tieu_chi, column, error_message}]
+            # "details": details,  # có thể bỏ để tối ưu latency
+        }
+
+        if details:
+            print(details)
+            background_tasks.add_task(_persist_details_to_db, details)
+
+
+        return await handler.format_response(
+            request_id=req_id,
+            total_time=total_time,
+            ma_don_vi=raw_req.get("ma_don_vi"),
+            ma_bao_cao=raw_req.get("ma_bao_cao"),
+            ky_du_lieu=raw_req.get("ky_du_lieu"),
+            detailed_results=response_payload,
+            validation_errors=processed.get("_validation_errors") or [],
+        )
 
     except HTTPException:
-        # Re-raise HTTP exceptions as-is
+        # Thiếu/sai kiểu các trường bắt buộc top-level/ma_tieu_chi sẽ vào đây (400)
         raise
-
-
-async def _handle_tier_based_prediction(
-    processed_request: Dict, request_id: str, start_time: float, model_info: Dict
-) -> Dict:
-    """Handle tier-based prediction with enhanced error context"""
-    orchestrator = get_tier_orchestrator()
-
-    # Extract model name with context
-    extractor = ModelNameExtractor()
-    model_name = extractor.extract_model_name(processed_request)
-
-    # Route request with lazy loading support
-    deployment_name = await orchestrator.route_request(model_name, processed_request)
-
-    deployment_handle = serve.get_app_handle(deployment_name)
-    processed_request["request_id"] = request_id
-    result = await deployment_handle.remote(processed_request)
-
-    # Record metrics for tier management
-    inference_time = time.time() - start_time
-    success = result.get("status") == "success"
-    orchestrator.record_request_metrics(
-        model_name, deployment_name, inference_time, not success
-    )
-
-    return result
+    except Exception as e:
+        total_time = time.time() - start
+        raise HTTPException(status_code=500, detail=str(e))

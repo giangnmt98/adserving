@@ -3,53 +3,41 @@ Core Service Endpoints (Health, Readiness, Service Info)
 """
 
 from datetime import datetime
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from ray import serve
 
 from adserving.src.config.config_manager import get_config
-from adserving.src.core.model_manager import ModelManager
-from adserving.src.monitoring.model_monitor import ModelMonitor
-from adserving.src.router.model_router import ModelRouter
 from adserving.src.utils.logger import get_logger
 
 from .api_dependencies import (
-    get_model_manager,
-    get_model_router,
-    get_monitor,
-    service_readiness,
     service_start_time,
+    service_readiness,  # THÊM: fallback trạng thái sẵn sàng
 )
-from .response_model import (
-    HealthResponse,
-    ServiceInfoResponse,
-    APIDocResponse
-)
+
+from .response_model import HealthResponse, ServiceInfoResponse
 
 logger = get_logger()
-
 router = APIRouter()
+
+# (Phần còn lại giữ nguyên: service_info, health_check ...)
 
 
 @router.get("/", response_model=ServiceInfoResponse)
 async def service_info(
-    manager: ModelManager = Depends(get_model_manager),
-    model_router: ModelRouter = Depends(get_model_router),
 ):
     """Get service information and status"""
     try:
         uptime = datetime.now() - service_start_time
         uptime_str = str(uptime).split(".")[0]  # Remove microseconds
 
-        # Get model statistics
-        cache_stats = manager.get_cache_stats()
-        models_loaded = cache_stats.get("total_models", 0)
-
         return ServiceInfoResponse(
             service="Anomaly Detection API",
             version=get_config().api_version,
             status="running",
             uptime=uptime_str,
-            models_loaded=models_loaded,
             endpoints={
                 # Core Service Endpoints
                 "service_info": "GET /",
@@ -71,14 +59,6 @@ async def service_info(
                 "batch_threshold_update": "POST /models/batch-threshold-update",
                 "warm_model": "POST /models/{model_name}/warm",
                 "evict_model": "DELETE /models/{model_name}/cache",
-                # Tier Management Endpoints (từ tier_management_endpoints.py)
-                # "manual_tier_assignment": "POST " "/tier/manual-assignment",
-                # "remove_tier_assignment": "DELETE /tier/manual-assignment/{model_name}",
-                # "get_tier_assignment": "GET /tier/manual-assignment/{model_name}",
-                # "business_critical_models": "GET /tier/business-critical-models",
-                # "add_critical_pattern": "POST /tier/business-critical-pattern",
-                # "remove_critical_pattern": "DELETE /tier/business-critical-pattern/{pattern_id}",
-                # System Endpoints
                 "api_documentation": "GET /docs",
                 "openapi_schema": "GET /openapi.json",
                 "redoc_documentation": "GET /redoc",
@@ -89,16 +69,6 @@ async def service_info(
                 "with tiered loading, parameter management, and intelligent routing"
             ),
             features=[
-                "Tiered model loading (Hot/Warm/Cold)",
-                "Single endpoint routing with intelligent selection",
-                "Real-time parameter updates via API",
-                "Model version rollback capabilities",
-                "Batch parameter operations",
-                "Advanced monitoring and metrics",
-                "Model cache management (warm/evict)",
-                "Business-critical model prioritization",
-                "Manual tier assignment support",
-                "Comprehensive health checks",
                 "Zero-downtime deployment",
                 "Prometheus metrics export",
                 "Interactive API documentation",
@@ -115,30 +85,76 @@ async def service_info(
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check(
-    manager: ModelManager = Depends(get_model_manager),
-    model_router: ModelRouter = Depends(get_model_router),
-    monitor: ModelMonitor = Depends(get_monitor),
 ):
-    """Comprehensive health check with proper status codes"""
+    """
+    Comprehensive health check phù hợp hệ thống:
+    - Ưu tiên trạng thái Ray Serve app 'preloaded_model_server'.
+    - Lấy số model đã preload trực tiếp từ Serve nếu có.
+    - Rơi về service_readiness nếu Serve chưa sẵn sàng.
+    - Trả HTTP 200 / 206 / 503 phù hợp.
+    """
     try:
+        cfg = get_config()
         uptime = datetime.now() - service_start_time
         uptime_str = str(uptime).split(".")[0]
 
-        # Get comprehensive stats
-        cache_stats = manager.get_cache_stats()
-        dashboard_data = monitor.get_dashboard_data()
-        models_loaded = cache_stats.get("total_models", 0)
+        # 1) Mặc định các thống kê rỗng/an toàn
+        cache_stats: Dict[str, Any] = {}
+        deployment_stats: Dict[str, Any] = {}
+        models_loaded = 0
 
-        # Check for partial health conditions
+        # 2) Kiểm tra Ray Serve app readiness
+        serve_ready = False
+        try:
+            handle = serve.get_app_handle("preloaded_model_server")
+            # Thử gọi nhanh (đồng bộ) một RPC nhẹ để đánh giá sẵn sàng
+            # Ở đây gọi list_models (nếu raise sẽ vào except)
+            names = await handle.list_models.remote()
+            if names is not None:
+                serve_ready = True
+                models_loaded = len(names)
+                deployment_stats["preloaded_model_server"] = {
+                    "status": "running",
+                    "models_loaded": models_loaded,
+                }
+        except Exception as e:
+            # Serve chưa sẵn sàng hoặc có lỗi
+            logger.debug(f"Serve app not ready: {e}")
+            deployment_stats["preloaded_model_server"] = {
+                "status": "not_ready",
+                "error": str(e),
+            }
+
+        # 4) Nếu serve_ready = False, dùng service_readiness làm fallback
+        if not serve_ready:
+            models_loaded = int(service_readiness.get("models_loaded", 0))
+            deployment_stats.setdefault("preloaded_model_server", {})
+            deployment_stats["preloaded_model_server"].update(
+                {
+                    "status": "not_ready",
+                    "initialization_complete": service_readiness.get(
+                        "initialization_complete", False
+                    ),
+                    "models_failed": service_readiness.get("models_failed", 0),
+                }
+            )
+
+        # 5) Xác định status chung
         total_models = (
-            service_readiness["models_loaded"] + service_readiness["models_failed"]
+            int(service_readiness.get("models_loaded", 0))
+            + int(service_readiness.get("models_failed", 0))
         )
-        has_failed_models = service_readiness["models_failed"] > 0
+        has_failed = int(service_readiness.get("models_failed", 0)) > 0
 
-        # Determine health status
-        if has_failed_models and total_models > 0:
-            # Some models failed but service is partially healthy
-            status_code = 206  # Partial Content
+        # Quy tắc trả mã:
+        # - 503 nếu Serve chưa sẵn sàng.
+        # - 206 nếu có failed_models > 0 hoặc có cảnh báo nhẹ (Serve sẵn sàng nhưng có lỗi nhỏ).
+        # - 200 nếu hoàn toàn healthy.
+        if not serve_ready:
+            status_code = 503
+            status = "unhealthy"
+        elif has_failed and total_models > 0:
+            status_code = 206
             status = "partially_healthy"
         else:
             status_code = 200
@@ -146,21 +162,20 @@ async def health_check(
 
         response = HealthResponse(
             status=status,
-            version=get_config().api_version,
+            version=cfg.api_version,
             timestamp=datetime.now().isoformat(),
             models_loaded=models_loaded,
             uptime=uptime_str,
-            cache_stats=cache_stats,
-            deployment_stats=dashboard_data.get("deployments", {}),
+            deployment_stats=deployment_stats,
         )
 
-        # Return with appropriate status code
-        if status_code == 206:
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse(status_code=206, content=response.model_dump())
-        return response
+        if status_code == 200:
+            return response
+        else:
+            # Trả JSONResponse để gán status code tuỳ biến (206 / 503)
+            return JSONResponse(status_code=status_code, content=response.model_dump())
 
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
+

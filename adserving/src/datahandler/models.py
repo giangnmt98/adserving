@@ -157,7 +157,8 @@ class PredictionRequest(BaseModel):
                 validation_errors.append(
                     {
                         "error_message": f"Phần tử thứ {i + 1} trong data phải là kiểu đối tượng (object), "
-                        f"nhận được kiểu {type(item).__name__}",
+                                         f"nhận được kiểu {type(item).__name__}",
+                        "ma_tieu_chi": None,
                     }
                 )
                 continue
@@ -169,48 +170,54 @@ class PredictionRequest(BaseModel):
                 validation_errors.append(
                     {
                         "error_message": f"Phần tử thứ {i + 1} "
-                        f"trong data thiếu trường bắt buộc ma_tieu_chi",
+                                         f"trong data thiếu trường bắt buộc ma_tieu_chi",
+                        "ma_tieu_chi": None,
                     }
                 )
-                ma_tieu_chi = f"element_{i + 1}"  # Default for further validation
+                # Không set ma_tieu_chi khi chưa có, downstream sẽ dùng UNKNOWN cho nhóm này
             else:
                 if not isinstance(item["ma_tieu_chi"], str):
                     validation_errors.append(
                         {
                             "error_message": f"Trường ma_tieu_chi trong phần tử thứ {i + 1}"
-                            f" phải là kiểu chuỗi (string),"
-                            f" nhận được kiểu {type(item['ma_tieu_chi']).__name__}",
+                                             f" phải là kiểu chuỗi (string),"
+                                             f" nhận được kiểu {type(item['ma_tieu_chi']).__name__}",
+                            "ma_tieu_chi": None,
                         }
                     )
                 elif not item["ma_tieu_chi"].strip():
                     validation_errors.append(
                         {
                             "error_message": f"Trường ma_tieu_chi trong phần tử "
-                            f"thứ {i + 1} không được rỗng",
+                                             f"thứ {i + 1} không được rỗng",
+                            "ma_tieu_chi": None,
                         }
                     )
+                else:
+                    ma_tieu_chi = item["ma_tieu_chi"].strip()
 
             # Check for at least one FN field
             fn_fields = [k for k in item.keys() if k.startswith("FN")]
             if not fn_fields:
                 validation_errors.append(
                     {
-                        "error_message": f"Phần tử thứ {i + 1} trong data (ma_tieu_chi: {ma_tieu_chi}) "
-                        f"phải có ít nhất một trường FN (ví dụ: FN01, FN02, ...)",
+                        "error_message": f"Phần tử thứ {i + 1} trong data (ma_tieu_chi: {ma_tieu_chi or 'UNKNOWN'}) "
+                                         f"phải có ít nhất một trường FN (ví dụ: FN01, FN02, ...)",
+                        "ma_tieu_chi": ma_tieu_chi,
                     }
                 )
             else:
                 # Validate each FN field
                 for fn_field in fn_fields:
                     fn_value = item[fn_field]
-
                     # Check data type
                     if not isinstance(fn_value, (int, float)):
                         validation_errors.append(
                             {
                                 "error_message": f"Trường {fn_field} phải là kiểu số (number),"
-                                f" nhận được kiểu {type(fn_value).__name__}",
+                                                 f" nhận được kiểu {type(fn_value).__name__}",
                                 "ma_tieu_chi": ma_tieu_chi,
+                                "fn_field": fn_field,  # cung cấp cột cho downstream
                             }
                         )
                         continue
@@ -224,23 +231,22 @@ class PredictionRequest(BaseModel):
             validated_data = ValidatedList(v)
             validated_data._validation_errors = validation_errors
 
-            # Distribute errors to individual items for backward compatibility
+            # Ensure each item has an error bucket
             for item in validated_data:
-                if isinstance(item, dict):
-                    if "_validation_errors" not in item:
-                        item["_validation_errors"] = []
+                if isinstance(item, dict) and "_validation_errors" not in item:
+                    item["_validation_errors"] = []
 
             # Group errors by ma_tieu_chi and add to respective items
             for error in validation_errors:
-                if error["ma_tieu_chi"]:
-                    for item in validated_data:
-                        if (
-                            isinstance(item, dict)
-                            and item.get("ma_tieu_chi") == error["ma_tieu_chi"]
-                        ):
-                            if "_validation_errors" not in item:
-                                item["_validation_errors"] = []
-                            item["_validation_errors"].append(error)
+                mtc = error.get("ma_tieu_chi")
+                if not mtc:
+                    # Không thể gán vào item cụ thể vì thiếu mã tiêu chí; downstream sẽ gộp về UNKNOWN
+                    continue
+                for item in validated_data:
+                    if isinstance(item, dict) and item.get("ma_tieu_chi") == mtc:
+                        if "_validation_errors" not in item:
+                            item["_validation_errors"] = []
+                        item["_validation_errors"].append(error)
 
             return validated_data
 
@@ -277,14 +283,6 @@ class ModelUsageInfo(BaseModel):
     model_name: str
     model_version: str
     inference_time: float
-
-
-class ModelInfo(BaseModel):
-    """Model deployment and routing information"""
-
-    deployment_strategy: str
-    routing_strategy: str
-    models_used: List[ModelUsageInfo]
 
 
 class RequestInfo(BaseModel):
@@ -410,7 +408,7 @@ class APIResponse:
 
     metadata: Metadata
     request_info: RequestInfo
-    results: List[DetailedPredictionResult]
+    results: Dict[str, List[Any]]
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary with conditional detailed_results"""

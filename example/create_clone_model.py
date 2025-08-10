@@ -1,153 +1,272 @@
-# train_clone_models.py (parallel version)
-import pandas as pd
-import numpy as np
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
-import mlflow
-import mlflow.sklearn
-from datetime import datetime
-import time
+
 import json
 import os
 import random
 import string
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
 
-mlflow.set_tracking_uri("http://localhost:5000")
+import mlflow
+import mlflow.sklearn
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+
+
+"""
+Script: anomaly_clone_float_models.py
+
+- Trains IsolationForest on 1D feature 'gia_tri'.
+- Inference wrapper accepts ONLY a single float.
+- Auto-computes anomaly_threshold via training-score quantile by
+  contamination and logs all stats to MLflow params.
+- Clones: trains on original combination but registers under new names,
+  runs in parallel, and outputs a JSON of registered model names.
+
+Prereqs:
+- MLflow server reachable at MLFLOW_TRACKING_URI or http://localhost:5000
+- CSV data: bao_cao_dulieu_not_none.csv with columns:
+    ma_don_vi, ma_bao_cao, ma_tieu_chi, fld_code,
+    ky_du_lieu, gia_tri
+"""
+
+
+# MLflow setup
+mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"))
 mlflow.set_experiment("Anomaly_Detection_Models")
 
 
+@dataclass
+class TrainConfig:
+    contamination: float = 0.1
+    n_estimators: int = 100
+    random_state: int = 42
+
+
+def _as_2d(values: pd.Series) -> np.ndarray:
+    return values.astype(float).to_numpy().reshape(-1, 1)
+
+
+def _auto_threshold(scores: np.ndarray, contamination: float) -> float:
+    # Lower decision_function score => more anomalous
+    return float(np.quantile(scores, contamination))
+
+
+class AnomalyDetectionWrapperFloat:
+    """
+    Inference wrapper stored in MLflow that enforces float input.
+
+    Methods:
+      - predict(x: float) -> float decision score
+      - predict_label(x: float, threshold: Optional[float]) -> int
+        Returns -1 for anomaly, 1 for normal.
+    """
+
+    def __init__(
+        self,
+        model: IsolationForest,
+        scaler: StandardScaler,
+        anomaly_threshold: float,
+    ):
+        self.model = model
+        self.scaler = scaler
+        self.anomaly_threshold = float(anomaly_threshold)
+
+    def predict(self, x: float) -> float:
+        if not isinstance(x, (float, int)):
+            raise TypeError("Input must be a single float.")
+        arr = np.array([[float(x)]], dtype=float)
+        arr_scaled = self.scaler.transform(arr)
+        score = self.model.decision_function(arr_scaled)[0]
+        return float(score)
+
+    def predict_label(self, x: float, threshold: Optional[float] = None) -> int:
+        thr = self.anomaly_threshold if threshold is None else float(threshold)
+        score = self.predict(x)
+        return -1 if score < thr else 1
+
+
 class SimpleAnomalyDetectionModel:
-    def __init__(self):
-        self.model = None
-        self.scaler = None
+    """
+    Train IsolationForest on univariate 'gia_tri' only.
+    Supports cloning by registering new names for the same trained spec.
+    """
 
-    def prepare_features(self, data):
-        data_sorted = data.sort_values('ky_du_lieu')
-        features = pd.DataFrame()
-        features['gia_tri'] = data_sorted['gia_tri']
-        features['rolling_mean_3'] = data_sorted['gia_tri'].rolling(3, min_periods=1).mean()
-        features['rolling_std_3'] = data_sorted['gia_tri'].rolling(3, min_periods=1).std().fillna(0)
-        features['rolling_mean_7'] = data_sorted['gia_tri'].rolling(7, min_periods=1).mean()
-        features['rolling_std_7'] = data_sorted['gia_tri'].rolling(7, min_periods=1).std().fillna(0)
-        mean_val = data_sorted['gia_tri'].mean()
-        std_val = data_sorted['gia_tri'].std()
-        features['deviation_from_mean'] = np.abs(data_sorted['gia_tri'] - mean_val)
-        features['pct_change'] = data_sorted['gia_tri'].pct_change().fillna(0)
-        features['z_score'] = np.abs((data_sorted['gia_tri'] - mean_val) / std_val)
-        return features.fillna(0)
+    def __init__(self, cfg: Optional[TrainConfig] = None):
+        self.cfg = cfg or TrainConfig()
 
-    def train_model(self, data):
-        features = self.prepare_features(data)
+    def _prepare(self, data: pd.DataFrame) -> Tuple[np.ndarray, StandardScaler]:
+        x = _as_2d(data["gia_tri"])
         scaler = StandardScaler()
-        features_scaled = scaler.fit_transform(features)
-        model = IsolationForest(contamination=0.1, random_state=42, n_estimators=100)
-        model.fit(features_scaled)
-        return model, scaler
+        x_scaled = scaler.fit_transform(x)
+        return x_scaled, scaler
 
-    def save_to_mlflow(self, model, scaler, model_name, num_samples):
-        class AnomalyDetectionWrapper:
-            def __init__(self, model, scaler):
-                self.model = model
-                self.scaler = scaler
+    def train_model(
+        self, data: pd.DataFrame
+    ) -> Tuple[IsolationForest, StandardScaler, float, Dict[str, float]]:
+        x_scaled, scaler = self._prepare(data)
+        model = IsolationForest(
+            contamination=self.cfg.contamination,
+            random_state=self.cfg.random_state,
+            n_estimators=self.cfg.n_estimators,
+        )
+        model.fit(x_scaled)
 
-            def predict(self, X):
-                if isinstance(X, pd.DataFrame) and 'gia_tri' in X.columns:
-                    features = self._prepare_features(X)
-                    features_scaled = self.scaler.transform(features)
-                    preds = self.model.predict(features_scaled)
-                    return preds == -1
-                else:
-                    raise ValueError("Input phải là DataFrame với cột 'gia_tri'")
+        # Compute training scores and choose threshold by contamination quantile
+        scores = model.decision_function(x_scaled)
+        thr = _auto_threshold(scores, self.cfg.contamination)
+        stats = {
+            "train_score_min": float(np.min(scores)),
+            "train_score_p10": float(np.quantile(scores, 0.10)),
+            "train_score_p50": float(np.quantile(scores, 0.50)),
+            "train_score_p90": float(np.quantile(scores, 0.90)),
+            "train_score_max": float(np.max(scores)),
+            "actual_anomaly_rate": float(np.mean(scores < thr)),
+        }
+        return model, scaler, thr, stats
 
-            def _prepare_features(self, data):
-                features = pd.DataFrame()
-                features['gia_tri'] = data['gia_tri']
-                features['rolling_mean_3'] = data['gia_tri'].rolling(3, min_periods=1).mean()
-                features['rolling_std_3'] = data['gia_tri'].rolling(3, min_periods=1).std().fillna(0)
-                features['rolling_mean_7'] = data['gia_tri'].rolling(7, min_periods=1).mean()
-                features['rolling_std_7'] = data['gia_tri'].rolling(7, min_periods=1).std().fillna(0)
-                mean_val = data['gia_tri'].mean()
-                std_val = data['gia_tri'].std()
-                features['deviation_from_mean'] = np.abs(data['gia_tri'] - mean_val)
-                features['pct_change'] = data['gia_tri'].pct_change().fillna(0)
-                features['z_score'] = np.abs((data['gia_tri'] - mean_val) / std_val)
-                return features.fillna(0)
-
-        wrapped_model = AnomalyDetectionWrapper(model, scaler)
-
-        with mlflow.start_run(run_name=f"train_{model_name}"):
+    def save_to_mlflow(
+        self,
+        model: IsolationForest,
+        scaler: StandardScaler,
+        anomaly_threshold: float,
+        model_name: str,
+        num_samples: int,
+        date_range: str,
+        stats: Dict[str, float],
+    ) -> Dict[str, str]:
+        wrapped = AnomalyDetectionWrapperFloat(
+            model=model, scaler=scaler, anomaly_threshold=anomaly_threshold
+        )
+        with mlflow.start_run(run_name=f"register_{model_name}"):
             mlflow.log_param("model_name", model_name)
-            mlflow.log_param("training_samples", num_samples)
-            mlflow.log_param("anomaly_threshold", 0.0000001)
+            mlflow.log_param("training_samples", int(num_samples))
+            mlflow.log_param("input_type", "float")
+            mlflow.log_param("algorithm", "isolation_forest")
+            mlflow.log_param("contamination", self.cfg.contamination)
+            mlflow.log_param("n_estimators", self.cfg.n_estimators)
+            mlflow.log_param("random_state", self.cfg.random_state)
+            mlflow.log_param("threshold_method", "quantile_by_contamination")
+            mlflow.log_param("anomaly_threshold", anomaly_threshold)
+            mlflow.log_param("data_date_range", date_range)
+            for k, v in stats.items():
+                mlflow.log_param(k, v)
+            mlflow.set_tag("model_type", "anomaly_detection")
+            mlflow.set_tag("input_type", "float")
+            mlflow.set_tag("version", "2.0")
+
             mlflow.sklearn.log_model(
-                sk_model=wrapped_model,
+                sk_model=wrapped,
                 artifact_path="model",
-                registered_model_name=model_name
+                registered_model_name=model_name,
             )
             run_id = mlflow.active_run().info.run_id
 
-        time.sleep(1)
+        time.sleep(0.5)
         client = mlflow.tracking.MlflowClient()
         versions = client.get_latest_versions(model_name, stages=["None"])
         if versions:
             version = versions[0].version
-            client.transition_model_version_stage(model_name, version, stage="Production")
-            print(f"{model_name} v{version} chuyển Production")
+            client.transition_model_version_stage(
+                name=model_name,
+                version=version,
+                stage="Production",
+            )
         return {
             "model_name": model_name,
-            "ma_don_vi": model_name.split("_")[0],
-            "ma_bao_cao": model_name.split("_")[1],
-            "ma_tieu_chi": model_name.split("_")[2],
-            "fld_code": model_name.split("_")[-1]
+            "mlflow_run_id": run_id,
+            "production_version": str(versions[0].version) if versions else "n/a",
         }
 
 
-def train_and_register_single_task(sub_data, row, i):
-    detector = SimpleAnomalyDetectionModel()
-    random_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-    new_chi_tieu = f"{row['ma_tieu_chi']}_R{random_suffix}"
-    model_name = f"{row['ma_don_vi']}_{row['ma_bao_cao']}_{new_chi_tieu}_{row['fld_code']}"
-    model, scaler = detector.train_model(sub_data)
-    return detector.save_to_mlflow(model, scaler, model_name, len(sub_data))
+def _suffix(k: int = 6) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(random.choices(alphabet, k=k))
+
+
+def train_clone_task(
+    sub_data: pd.DataFrame,
+    row: pd.Series,
+    cfg: TrainConfig,
+    clone_index: int,
+) -> Dict[str, str]:
+    detector = SimpleAnomalyDetectionModel(cfg)
+    model, scaler, thr, stats = detector.train_model(sub_data)
+    date_range = f"{sub_data['ky_du_lieu'].min()} to {sub_data['ky_du_lieu'].max()}"
+    new_chi_tieu = f"{row['ma_tieu_chi']}_R{_suffix(6)}"
+    model_name = (
+        f"{row['ma_don_vi']}_{row['ma_bao_cao']}"
+        f"_{new_chi_tieu}_{row['fld_code']}"
+    )
+    return detector.save_to_mlflow(
+        model=model,
+        scaler=scaler,
+        anomaly_threshold=thr,
+        model_name=model_name,
+        num_samples=len(sub_data),
+        date_range=date_range,
+        stats=stats,
+    )
+
+
+def main() -> None:
+    data_path = os.getenv("DATA_PATH", "bao_cao_dulieu_not_none.csv")
+    clones_per_combo = int(os.getenv("CLONES_PER_COMBO", "55"))
+    max_workers = int(os.getenv("MAX_WORKERS", "16"))
+
+    if not os.path.exists(data_path):
+        print(f"Data not found: {data_path}")
+        return
+
+    data = pd.read_csv(data_path)
+    data["ky_du_lieu"] = pd.to_datetime(data["ky_du_lieu"])
+
+    combos = data.drop_duplicates(
+        subset=["ma_don_vi", "ma_bao_cao", "ma_tieu_chi", "fld_code"]
+    )
+
+    tasks = []
+    for _, row in combos.iterrows():
+        sub = data[
+            (data["ma_don_vi"] == row["ma_don_vi"])
+            & (data["ma_bao_cao"] == row["ma_bao_cao"])
+            & (data["ma_tieu_chi"] == row["ma_tieu_chi"])
+            & (data["fld_code"] == row["fld_code"])
+        ]
+        if len(sub) < 5:
+            continue
+        for idx in range(clones_per_combo):
+            tasks.append((sub.copy(), row.copy(), TrainConfig(), idx + 1))
+
+    print(f"Total clone tasks: {len(tasks)}")
+    results = []
+    failures = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [
+            pool.submit(train_clone_task, *task) for task in tasks
+        ]
+        for fut in as_completed(futures):
+            try:
+                results.append(fut.result())
+            except Exception as exc:
+                failures += 1
+                print(f"Task failed: {exc}")
+
+
+    list_model = os.listdir("./mlruns/models")
+    df = pd.DataFrame(list_model, columns = ['model_name'])
+    df.to_csv('list_model.csv', index=False)
+    # out_path = os.getenv("OUTPUT_JSON", "generated_model_names.json")
+    # with open(out_path, "w", encoding="utf-8") as f:
+    #     json.dump(results, f, indent=2, ensure_ascii=False)
+    #
+    # print(f"Saved {len(results)} models. Failures: {failures}.")
+    # print(f"Output: {out_path}")
 
 
 if __name__ == "__main__":
-    N = 60
-    MAX_WORKERS = 20
-    data_path = "bao_cao_dulieu_not_none.csv"
-    data = pd.read_csv(data_path)
-    data['ky_du_lieu'] = pd.to_datetime(data['ky_du_lieu'])
-
-    combos = data.drop_duplicates(subset=['ma_don_vi', 'ma_bao_cao', 'ma_tieu_chi', 'fld_code'])
-    tasks = []
-
-    for _, row in combos.iterrows():
-        sub_data = data[(data['ma_don_vi'] == row['ma_don_vi']) &
-                        (data['ma_bao_cao'] == row['ma_bao_cao']) &
-                        (data['ma_tieu_chi'] == row['ma_tieu_chi']) &
-                        (data['fld_code'] == row['fld_code'])]
-        if len(sub_data) < 5:
-            continue
-        for i in range(1, N + 1):
-            tasks.append((sub_data.copy(), row, i))
-
-    results = []
-    print(f"Running {len(tasks)} model clones in parallel...")
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_cfg = {
-            executor.submit(train_and_register_single_task, *task): task for task in tasks
-        }
-        for future in as_completed(future_to_cfg):
-            try:
-                result = future.result()
-                results.append(result)
-            except Exception as e:
-                print(f"Task failed: {str(e)}")
-
-    output_path = "generated_model_names.json"
-    with open(output_path, "w") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-
-    print(f"Đã lưu {len(results)} model clone vào {output_path}")
+    main()

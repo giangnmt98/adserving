@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -23,11 +24,8 @@ class DataHandler:
 
     async def process_request(self, request: PredictionRequest) -> Dict[str, Any]:
         """Process and validate input request"""
-        print(request)
         try:
-            # Process the request in the specified format
             return await self._process_new_data_request(request)
-
         except Exception as e:
             self.logger.error(f"Error processing request: {e}")
             raise
@@ -36,15 +34,12 @@ class DataHandler:
         self, request: PredictionRequest
     ) -> Dict[str, Any]:
         """Process the specified data format request"""
-        # Extract validation errors from request data
         validation_errors = []
         for item in request.data:
             if isinstance(item, dict) and "_validation_errors" in item:
                 validation_errors.extend(item["_validation_errors"])
-                # Remove validation errors from the data before processing
                 del item["_validation_errors"]
 
-        # Return the request data in the format expected by pooled deployment
         result = {
             "ma_don_vi": request.ma_don_vi,
             "ma_bao_cao": request.ma_bao_cao,
@@ -52,13 +47,11 @@ class DataHandler:
             "data": request.data,
         }
 
-        # Add validation errors if any exist
         if validation_errors:
             result["_validation_errors"] = validation_errors
 
         return result
 
-    # Thêm method mới cho detailed response formatting
     async def format_response(
         self,
         request_id: str,
@@ -70,55 +63,80 @@ class DataHandler:
         validation_errors: Optional[List] = None,
     ) -> APIResponse:
         try:
-            warnings = None
+            status = detailed_results.get("status", "success")
+            anomalies = detailed_results.get("anomalies", [])
+            details = detailed_results.get("details", [])
+            failed: List[Dict[str, str]] = detailed_results.get("failed", []) or []
+
+            def _infer_column_from_message(msg: str) -> str:
+                if not isinstance(msg, str):
+                    return "UNKNOWN"
+                m = re.search(r"\bFN\d{1,2}\b", msg, flags=re.IGNORECASE)
+                return (m.group(0).upper() if m else "UNKNOWN")
+
+            # Chuyển validation_errors thành failed [{ma_tieu_chi, column, error_message}]
             if validation_errors:
-                warnings = [
-                    (
-                        {**val_error.to_dict(), "status": "error"}
-                        if hasattr(val_error, "to_dict")
-                        else (
-                            {**val_error, "status": "error"}
-                            if isinstance(val_error, dict)
-                            else {"error": str(val_error), "status": "error"}
+                for err in validation_errors:
+                    if hasattr(err, "to_dict"):
+                        e = err.to_dict()
+                        mtc = (e.get("ma_tieu_chi") or "").strip() or "UNKNOWN"
+                        msg = e.get("error_message") or e.get("error") or "validation_error"
+                        col = e.get("fn_field") or e.get("fld_code") or _infer_column_from_message(str(msg))
+                        if not col or col == "UNKNOWN":
+                            if "ma_tieu_chi" in str(msg).lower():
+                                col = "ma_tieu_chi"
+                        failed.append({"ma_tieu_chi": mtc, "column": col, "error_message": str(msg)})
+                    elif isinstance(err, dict):
+                        mtc = (err.get("ma_tieu_chi") or "").strip() or "UNKNOWN"
+                        msg = (
+                            err.get("error_message")
+                            or err.get("message")
+                            or err.get("error")
+                            or "validation_error"
                         )
-                    )
-                    for val_error in validation_errors
-                ]
+                        col = (
+                            err.get("fn_field")
+                            or err.get("fld_code")
+                            or _infer_column_from_message(str(msg))
+                        )
+                        if not col or col == "UNKNOWN":
+                            if "ma_tieu_chi" in str(msg).lower():
+                                col = "ma_tieu_chi"
+                        failed.append({"ma_tieu_chi": mtc, "column": col, "error_message": str(msg)})
+                    else:
+                        msg = str(err)
+                        col = _infer_column_from_message(msg)
+                        failed.append({"ma_tieu_chi": "UNKNOWN", "column": col, "error_message": msg})
 
-            results_list = detailed_results["results"]
-            metadata, request_info = self._create_metadata_and_request_info(
-                results_list[0], request_id, total_time
+                # Có lỗi validate → ít nhất partial_success
+                status = "partial_success" if status == "success" else status
+
+            # Nếu không có details mà có failed → error
+            if not details and failed and status == "success":
+                status = "error"
+
+            metadata = Metadata(
+                status=status,
+                timestamp=datetime.now().isoformat(),
+                request_id=request_id,
+                api_version=self.config.api_version,
+                total_time=total_time,
             )
-
-            # Group anomalies by criteria
-            criteria_groups = {}
-            for result in results_list:
-                if result["status"] == "success" and result["is_anomaly"]:
-                    criteria_groups.setdefault(result["ma_tieu_chi"], []).append(
-                        result["fld_code"]
-                    )
-
-            # Calculate status based on prediction results
-            failed_count = sum(1 for r in results_list if r["status"] == "error")
-
-            if failed_count == 0:
-                metadata.status = "success"
-            if failed_count == len(results_list):
-                metadata.status = "error"
-            if warnings:
-                metadata.status = "partial_success"
-
-            if warnings:
-                results_list.extend(warnings)
 
             request_info = RequestInfo(
                 ma_don_vi=ma_don_vi, ma_bao_cao=ma_bao_cao, ky_du_lieu=ky_du_lieu
             )
 
+            response_body = {
+                "anomalies": anomalies,     # [{ma_tieu_chi, list_anomaly}]
+                "failed": failed,           # [{ma_tieu_chi, column, error_message}]
+                "details": details,         # có thể bỏ nếu muốn tối ưu latency
+            }
+
             return APIResponse(
                 metadata=metadata,
                 request_info=request_info,
-                results=results_list,
+                results=response_body,
             )
 
         except Exception as e:
@@ -126,6 +144,33 @@ class DataHandler:
             return self._create_detailed_error_response(
                 request_id, total_time, detailed_results
             )
+
+
+    def _create_detailed_error_response(
+            self,
+            request_id: str,
+            total_time: float,
+            detailed_results: Dict[str, Any],
+    ) -> APIResponse:
+        metadata = Metadata(
+            status="error",
+            timestamp=datetime.now().isoformat(),
+            request_id=request_id,
+            api_version=self.config.api_version,
+            total_time=total_time,
+        )
+
+        request_info = RequestInfo(
+            ma_don_vi=detailed_results.get("ma_don_vi", "UNKNOWN"),
+            ma_bao_cao=detailed_results.get("ma_bao_cao", "UNKNOWN"),
+            ky_du_lieu=detailed_results.get("ky_du_lieu", "UNKNOWN"),
+        )
+
+        return APIResponse(
+            metadata=metadata,
+            request_info=request_info,
+            results={"anomalies": [], "failed_elements": [], "details": []},
+        )
 
     # Thêm method mới cho detailed error response
     def _create_detailed_error_response(
