@@ -5,10 +5,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from ray import serve
 
-from adserving.src.config.config_manager import get_config
-from adserving.src.mlflow_utils.mlflow_parameter_updater import MLflowParameterUpdater
-from adserving.src.mlflow_utils.mlflow_client import MLflowClient as WrappedMLflowClient
 from adserving.src.api.response_model import ModelInfoResponse
+from adserving.src.config.config_manager import get_config
+from adserving.src.mlflow_handler.mlflow_client import \
+    MLflowClient as WrappedMLflowClient
+from adserving.src.mlflow_handler.mlflow_parameter_updater import \
+    MLflowParameterUpdater
 from adserving.src.utils.logger import get_logger
 
 logger = get_logger()
@@ -26,7 +28,9 @@ def _get_param_updater() -> MLflowParameterUpdater:
     # Tạo updater với client MLflow từ config (đúng kiểu đối số)
     try:
         cfg = get_config()
-        client = WrappedMLflowClient(tracking_uri=cfg.mlflow.tracking_uri)  # TẠO CLIENT ĐÚNG
+        client = WrappedMLflowClient(
+            tracking_uri=cfg.mlflow.tracking_uri
+        )  # TẠO CLIENT ĐÚNG
         return MLflowParameterUpdater(client)  # TRUYỀN CLIENT, KHÔNG TRUYỀN cfg.mlflow
     except Exception as e:
         logger.error(f"Cannot create MLflowParameterUpdater: {e}")
@@ -76,9 +80,7 @@ async def get_model_info(model_name: str):
         if not details or not isinstance(details, dict):
             raise HTTPException(status_code=404, detail="Model info unavailable")
 
-        loaded = bool(details.get("loaded", False))
         model_version = details.get("model_version")
-        # Nếu cần thêm thông tin (avg_inference_time, error/success counters) có thể lấy từ monitor
         avg_inference = 0.0
         error_count = 0
         success_count = 0
@@ -87,7 +89,7 @@ async def get_model_info(model_name: str):
             model_name=model_name,
             model_version=model_version or "",
             model_uri=f"models:/{model_name}/{model_version or 'Production'}",
-            loaded_at=datetime.now().isoformat(),  # Không có thời điểm chính xác từ Serve → tạm thời now()
+            loaded_at=datetime.now().isoformat(),
             last_accessed=datetime.now().isoformat(),
             access_count=0,
             memory_usage=0.0,
@@ -112,7 +114,8 @@ async def get_model_info(model_name: str):
 @router.get("/models/production")
 async def get_production_models():
     """
-    Lấy danh sách các model Production hiện có từ Serve (đang preload) hoặc fallback MLflow.
+    Lấy danh sách các model Production hiện có
+    từ Serve (đang preload) hoặc fallback MLflow.
     """
     try:
         handle = _get_serve_handle()
@@ -175,7 +178,9 @@ async def validate_parameters(model_name: str, request: ParameterUpdateRequest):
 
 
 @router.put("/models/{model_name}/threshold")
-async def update_model_threshold(model_name: str, request: AnomalyThresholdUpdateRequest):
+async def update_model_threshold(
+    model_name: str, request: AnomalyThresholdUpdateRequest
+):
     """Cập nhật threshold model trong MLflow."""
     try:
         if not 0.0 <= request.threshold <= 1.0:
@@ -253,8 +258,8 @@ async def rollback_model_version(request: RollbackRequest):
         model_name = request.model_name
         target_version = request.target_version
         success = updater.rollback_to_version(
-            model_name= model_name,
-            target_version= target_version,
+            model_name=model_name,
+            target_version=target_version,
         )
         if not success:
             raise HTTPException(status_code=500, detail="Failed to rollback model")
@@ -303,7 +308,9 @@ async def warm_model(model_name: str):
             raise HTTPException(status_code=500, detail="Invalid warm result")
         status = result.get("status", "error")
         if status == "error":
-            raise HTTPException(status_code=500, detail=result.get("message", "Warm failed"))
+            raise HTTPException(
+                status_code=500, detail=result.get("message", "Warm failed")
+            )
         return {
             "status": "success",
             "model_name": model_name,

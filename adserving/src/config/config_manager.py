@@ -1,68 +1,17 @@
 from __future__ import annotations
 
-import os
 import json
-import yaml
-from dataclasses import dataclass, field, asdict
+import os
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Union, Optional
+from typing import Any, Dict, Optional, Union
 
+import yaml
 
-from .core_configs import (
-    MLflowConfig,
-    RayConfig,
-)
-from .system_configs import (
-    LoggingConfig,
-    MonitoringConfig,
-    SecurityConfig,
-)
-@dataclass
-class ServeHTTPConfig:
-    host: str = "0.0.0.0"
-    port: int = 8000
-
-
-@dataclass
-class ServeAutoscalingConfig:
-    min_replicas: int = 2
-    max_replicas: int = 8
-    target_num_ongoing_requests_per_replica: int = 12
-
-
-@dataclass
-class ServeDeploymentConfig:
-    num_cpus: int = 1
-    memory_mb: int = 2048
-
-
-@dataclass
-class ServeConfig:
-    http: ServeHTTPConfig = field(default_factory=ServeHTTPConfig)
-    autoscaling: ServeAutoscalingConfig = field(default_factory=ServeAutoscalingConfig)
-    deployment: ServeDeploymentConfig = field(default_factory=ServeDeploymentConfig)
-
-
-@dataclass
-class PreloadConfig:
-    max_load_concurrency: int = 8
-
-
-@dataclass
-class WatcherConfig:
-    interval_seconds: int = 60
-    sanity_check_enabled: bool = False
-    sanity_inputs: List[float] = field(default_factory=list)
-
-
-@dataclass
-class APIGroupConfig:
-    host: str = "0.0.0.0"
-    port: int = 8001
-    prefix: str = "/api/v1"
-    version: str = "v1.0"
-    docs: bool = True
-    openapi: bool = True
+from .models import (APIGroupConfig, LoggingConfig, MLflowConfig,
+                     MonitoringConfig, PreloadConfig, RayConfig,
+                     SecurityConfig, ServeAutoscalingConfig, ServeConfig,
+                     ServeDeploymentConfig, ServeHTTPConfig, WatcherConfig)
 
 
 @dataclass
@@ -103,20 +52,28 @@ class Config:
 
     def _load_from_environment(self) -> None:
         """Load configuration from environment variables (ghi đè file config nếu có)"""
+        self._load_mlflow_config()
+        self._load_ray_config()
+        self._load_api_config()
+        self._load_legacy_api_config()
+        self._load_serve_config()
 
-        # MLflow
+    def _load_mlflow_config(self) -> None:
+        """Load MLflow configuration from environment"""
         mlflow_uri = os.getenv("MLFLOW_TRACKING_URI")
         if mlflow_uri:
             self.mlflow.tracking_uri = mlflow_uri
 
-        # Ray
+    def _load_ray_config(self) -> None:
+        """Load Ray configuration from environment"""
         ray_addr = os.getenv("RAY_ADDRESS")
         if ray_addr:
             self.ray.address = ray_addr
-        # Dashboard host/port nếu có trong RayConfig
+
         dash_host = os.getenv("RAY_DASHBOARD_HOST")
         if dash_host and hasattr(self.ray, "dashboard_host"):
             self.ray.dashboard_host = dash_host
+
         dash_port = os.getenv("RAY_DASHBOARD_PORT")
         if dash_port and hasattr(self.ray, "dashboard_port"):
             try:
@@ -124,10 +81,12 @@ class Config:
             except ValueError:
                 pass
 
-        # FastAPI host/port (nhóm api mới)
+    def _load_api_config(self) -> None:
+        """Load API configuration from environment"""
         api_host = os.getenv("FASTAPI_HOST")
         if api_host:
             self.api.host = api_host
+
         api_port = os.getenv("FASTAPI_PORT")
         if api_port:
             try:
@@ -135,10 +94,12 @@ class Config:
             except ValueError:
                 pass
 
-        # Back-compat env (cũ)
+    def _load_legacy_api_config(self) -> None:
+        """Load legacy API configuration from environment"""
         api_host_legacy = os.getenv("API_HOST")
         if api_host_legacy:
             self.api.host = api_host_legacy
+
         api_port_legacy = os.getenv("API_PORT")
         if api_port_legacy:
             try:
@@ -146,10 +107,12 @@ class Config:
             except ValueError:
                 pass
 
-        # Serve HTTP host/port
+    def _load_serve_config(self) -> None:
+        """Load Serve configuration from environment"""
         serve_http_host = os.getenv("SERVE_HTTP_HOST")
         if serve_http_host:
             self.serve.http.host = serve_http_host
+
         serve_http_port = os.getenv("SERVE_HTTP_PORT")
         if serve_http_port:
             try:
@@ -168,16 +131,14 @@ class Config:
             elif config_path.suffix.lower() == ".json":
                 data = json.load(f)
             else:
-                raise ValueError(f"Unsupported configuration file format: {config_path.suffix}")
+                raise ValueError(
+                    f"Unsupported configuration file format: {config_path.suffix}"
+                )
         return cls.from_dict(data)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
         config_data: Dict[str, Any] = {}
-
-        allowed_scalar_top_level = {
-            "api_host", "api_port", "api_prefix", "api_version", "enable_docs", "enable_openapi",
-        }
 
         def _wrap(d: Dict[str, Any], t):
             try:
@@ -185,29 +146,46 @@ class Config:
             except Exception:
                 return t()
 
+        def _process_serve_config(value: Dict[str, Any]) -> ServeConfig:
+            autoscaling = _wrap(value.get("autoscaling", {}), ServeAutoscalingConfig)
+            deployment = _wrap(value.get("deployment", {}), ServeDeploymentConfig)
+            http = _wrap(value.get("http", {}), ServeHTTPConfig)
+            return ServeConfig(
+                http=http, autoscaling=autoscaling, deployment=deployment
+            )
+
+        def _process_config(key: str, value: Dict[str, Any]) -> Any:
+            config_map = {
+                "mlflow": MLflowConfig,
+                "ray": RayConfig,
+                "monitoring": MonitoringConfig,
+                "logging": LoggingConfig,
+                "security": SecurityConfig,
+                "preload": PreloadConfig,
+                "watcher": WatcherConfig,
+                "api": APIGroupConfig,
+            }
+
+            if key == "serve":
+                return _process_serve_config(value)
+            elif key in config_map:
+                return _wrap(value, config_map[key])
+            return None
+
+        allowed_scalar_top_level = {
+            "api_host",
+            "api_port",
+            "api_prefix",
+            "api_version",
+            "enable_docs",
+            "enable_openapi",
+        }
+
         for key, value in (data or {}).items():
             if isinstance(value, dict):
-                if key == "mlflow":
-                    config_data["mlflow"] = _wrap(value, MLflowConfig)
-                elif key == "ray":
-                    config_data["ray"] = _wrap(value, RayConfig)
-                elif key == "monitoring":
-                    config_data["monitoring"] = _wrap(value, MonitoringConfig)
-                elif key == "logging":
-                    config_data["logging"] = _wrap(value, LoggingConfig)
-                elif key == "security":
-                    config_data["security"] = _wrap(value, SecurityConfig)
-                elif key == "serve":
-                    autoscaling = _wrap(value.get("autoscaling", {}), ServeAutoscalingConfig)
-                    deployment = _wrap(value.get("deployment", {}), ServeDeploymentConfig)
-                    http = _wrap(value.get("http", {}), ServeHTTPConfig)
-                    config_data["serve"] = ServeConfig(http=http, autoscaling=autoscaling, deployment=deployment)
-                elif key == "preload":
-                    config_data["preload"] = _wrap(value, PreloadConfig)
-                elif key == "watcher":
-                    config_data["watcher"] = _wrap(value, WatcherConfig)
-                elif key == "api":
-                    config_data["api"] = _wrap(value, APIGroupConfig)
+                config_value = _process_config(key, value)
+                if config_value is not None:
+                    config_data[key] = config_value
                 continue
 
             if key in allowed_scalar_top_level:

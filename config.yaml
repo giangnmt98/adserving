@@ -10,7 +10,7 @@ ray:
   address:
 
   # Số CPU/GPU cho Ray (optional)
-  num_cpus: 10
+  num_cpus: 14
   num_gpus: 0
   # runtime_env: {} # tuỳ chọn
 

@@ -1,10 +1,10 @@
 # Python
-from typing import Dict, Any, List, Optional
 from datetime import datetime
+from typing import Any, List, Optional
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from adserving.src.utils.logger import get_logger
@@ -51,7 +51,9 @@ def _pydantic_error_code(err_type: str) -> str:
         return "MISSING_REQUIRED_FIELD"
     if err_type.startswith("type_error"):
         return "INVALID_DATA_TYPE"
-    if err_type.startswith("value_error.date") or err_type.startswith("value_error.time"):
+    if err_type.startswith("value_error.date") or err_type.startswith(
+        "value_error.time"
+    ):
         return "INVALID_DATE_FORMAT"
     if err_type.startswith("value_error"):
         return "VALIDATION_ERROR"
@@ -91,6 +93,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             body = await request.body()
             if body:
                 import json
+
                 data = json.loads(body)
                 request_id = data.get("request_id")
     except Exception:
@@ -132,10 +135,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             except Exception:
                 idx = None
             if idx is not None and last_segment:
-                error_message = f"Data item tại vị trí {idx + 1} thiếu trường bắt buộc '{last_segment}'"
+                error_message = (
+                    f"Data item tại vị trí "
+                    f"{idx + 1} thiếu trường"
+                    f" bắt buộc '{last_segment}'"
+                )
 
-    logger.warning(f"Validation error ({error_code}) at {field_path}: {error_message}")
-    # 422 cho Pydantic; có thể dùng 400 cho missing top-level, nhưng bạn muốn 1 format duy nhất → vẫn giữ format và set code theo nhu cầu
+    logger.warning(
+        f"Validation error " f"({error_code}) at {field_path}: {error_message}"
+    )
     status_code = 400 if error_code == "MISSING_REQUIRED_FIELD" else 422
 
     return _unified_error_payload(
@@ -151,7 +159,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """Chuẩn hóa mọi HTTPException về format duy nhất."""
     # Nếu detail đã theo format mục tiêu thì passthrough
-    if isinstance(exc.detail, dict) and "error" in exc.detail and "status" in exc.detail:
+    if (
+        isinstance(exc.detail, dict)
+        and "error" in exc.detail
+        and "status" in exc.detail
+    ):
         # Đảm bảo status code của response là exc.status_code
         return JSONResponse(status_code=exc.status_code, content=exc.detail)
 
@@ -165,7 +177,9 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
     if isinstance(detail, dict):
         # Map nhẹ nếu có
-        error_message = detail.get("message") or detail.get("error_message") or error_message
+        error_message = (
+            detail.get("message") or detail.get("error_message") or error_message
+        )
         error_details = detail.get("error_details") or error_details
         field_path = detail.get("field_path") or field_path
 
@@ -211,7 +225,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
 async def general_exception_handler(request: Request, exc: Exception):
     """Fallback thống nhất cho lỗi không bắt được."""
-    logger.error(f"Unexpected error: {exc}", exc_info=True)
+    logger.error(f"Unexpected error: {exc}")
     return _unified_error_payload(
         error_code="INTERNAL_ERROR",
         error_message="An unexpected error occurred",

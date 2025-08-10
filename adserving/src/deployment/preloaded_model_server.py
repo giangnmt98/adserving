@@ -7,8 +7,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import mlflow.pyfunc
 from ray import serve
 
-from adserving.src.mlflow_utils.mlflow_client import MLflowClient as WrappedMLflowClient
-from adserving.src.mlflow_utils.mlflow_parameter_updater import MLflowParameterUpdater
+from adserving.src.mlflow_handler.mlflow_client import \
+    MLflowClient as WrappedMLflowClient
+from adserving.src.mlflow_handler.mlflow_parameter_updater import \
+    MLflowParameterUpdater
 from adserving.src.utils.logger import get_logger
 
 
@@ -35,11 +37,7 @@ def _parse_model_name(model_name: str) -> Tuple[str, str]:
     },
 )
 class PreloadedModelServer:
-    """
-    Một deployment duy nhất:
-    - Preload tất cả Production models từ MLflow.
-    - Duy trì zero-downtime bằng watcher phát hiện bản mới, load vào staging và atomic swap sang active.
-    """
+    """ """
 
     def __init__(
         self,
@@ -76,7 +74,9 @@ class PreloadedModelServer:
         self.logger.info("Preloading Production models from MLflow...")
         self._preload_all_sync(max_load_concurrency)
         self.is_ready = True
-        self.logger.info(f"Preload completed. Total loaded: {len(self.models_active)} models.")
+        self.logger.info(
+            f"Preload completed. Total loaded: {len(self.models_active)} models."
+        )
 
         # Khởi động watcher nền
         loop = asyncio.get_event_loop()
@@ -104,7 +104,9 @@ class PreloadedModelServer:
             self.logger.debug(f"Cannot fetch threshold for {model_name}: {e}")
         return None
 
-    def _load_model_version(self, name: str, ver: str | int) -> Tuple[Optional[Any], Optional[float], Optional[str]]:
+    def _load_model_version(
+        self, name: str, ver: str | int
+    ) -> Tuple[Optional[Any], Optional[float], Optional[str]]:
         """Load 1 model version, trả model, threshold, error."""
         try:
             uri = _build_model_uri(name, ver)
@@ -173,24 +175,34 @@ class PreloadedModelServer:
                 if not updates:
                     continue
 
-                self.logger.info(f"Detected {len(updates)} production updates: {updates}")
+                self.logger.info(
+                    f"Detected {len(updates)} production updates: {updates}"
+                )
 
                 # Load vào staging song song
                 loop = asyncio.get_event_loop()
                 load_tasks = []
                 for name, ver in updates:
-                    load_tasks.append(loop.run_in_executor(self._executor, self._load_model_version, name, ver))
+                    load_tasks.append(
+                        loop.run_in_executor(
+                            self._executor, self._load_model_version, name, ver
+                        )
+                    )
 
                 results = await asyncio.gather(*load_tasks, return_exceptions=False)
 
                 # Ghi staging + sanity + swap
                 for (name, ver), (model, th, err) in zip(updates, results):
                     if err or model is None:
-                        self.logger.error(f"Staging load failed for {name} v{ver}: {err}")
+                        self.logger.error(
+                            f"Staging load failed for {name} v{ver}: {err}"
+                        )
                         continue
 
                     if not await self._sanity_check(model):
-                        self.logger.error(f"Sanity check failed for {name} v{ver}, skip swap.")
+                        self.logger.error(
+                            f"Sanity check failed for {name} v{ver}, skip swap."
+                        )
                         continue
 
                     async with self._lock:
@@ -201,20 +213,17 @@ class PreloadedModelServer:
 
                         # Atomic swap
                         self.models_active[name] = self.models_staging.pop(name)
-                        self.model_versions[name] = self.model_versions_staging.pop(name)
+                        self.model_versions[name] = self.model_versions_staging.pop(
+                            name
+                        )
                         self.thresholds[name] = self.thresholds_staging.pop(name)
-                        self.logger.info(f"Swapped {name} to version {ver} (zero-downtime).")
+                        self.logger.info(
+                            f"Swapped {name} to version {ver} (zero-downtime)."
+                        )
 
             except Exception as e:
                 self.logger.error(f"Watcher loop error: {e}")
 
-    # ------------------------ predict APIs ----------------------
-
-    def ready(self) -> bool:
-        return self.is_ready
-
-    def list_models(self) -> List[str]:
-        return sorted(self.models_active.keys()) if self.is_ready else []
 
     def _threshold_of(self, model_name: str) -> Optional[float]:
         return self.thresholds.get(model_name)
@@ -259,7 +268,9 @@ class PreloadedModelServer:
         threshold = self._threshold_of(model_name)
         is_anomaly = False
         if threshold is not None:
-            is_anomaly = bool(score < threshold if threshold <= 0 else score > threshold)
+            is_anomaly = bool(
+                score < threshold if threshold <= 0 else score > threshold
+            )
 
         return {
             "model_name": model_name,
@@ -283,10 +294,15 @@ class PreloadedModelServer:
 
         async def _wrap(idx: int, m: str, v: float):
             async with sem:
-                res = await loop.run_in_executor(self._executor, self._predict_one, m, v)
+                res = await loop.run_in_executor(
+                    self._executor, self._predict_one, m, v
+                )
                 return idx, res
 
-        coros = [_wrap(i, str(t["model_name"]), float(t["value"])) for i, t in enumerate(tasks)]
+        coros = [
+            _wrap(i, str(t["model_name"]), float(t["value"]))
+            for i, t in enumerate(tasks)
+        ]
         outs = await asyncio.gather(*coros)
         outs.sort(key=lambda x: x[0])
         return [o[1] for o in outs]
@@ -339,7 +355,9 @@ class PreloadedModelServer:
 
         async def _one(idx: int, m: str, v: float):
             async with sem:
-                res = await loop.run_in_executor(self._executor, self._predict_one, m, v)
+                res = await loop.run_in_executor(
+                    self._executor, self._predict_one, m, v
+                )
                 return idx, res
 
         outs = await asyncio.gather(*[_one(i, m, v) for (i, m, v) in valid])

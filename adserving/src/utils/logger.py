@@ -131,7 +131,7 @@ class FrameworkLogger:
         """
         return {
             "level": "INFO",
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s [%(pathname)s:%(lineno)d] - %(message)s",
+            "format": "%(asctime)s - %(levelname)s - %(message)s",
             "date_format": "%Y-%m-%d %H:%M:%S",
             "use_colors": True,
             "file_logging": {

@@ -1,15 +1,11 @@
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from adserving.src.config.config_manager import get_config
-from adserving.src.datahandler.models import (
-    APIResponse,
-    Metadata,
-    PredictionError,
-    PredictionRequest,
-    RequestInfo,
-)
+from adserving.src.datahandler.models import (APIResponse, Metadata,
+                                              PredictionError,
+                                              PredictionRequest, RequestInfo)
 from adserving.src.utils.logger import get_logger
 
 logger = get_logger()
@@ -68,46 +64,8 @@ class DataHandler:
             details = detailed_results.get("details", [])
             failed: List[Dict[str, str]] = detailed_results.get("failed", []) or []
 
-            def _infer_column_from_message(msg: str) -> str:
-                if not isinstance(msg, str):
-                    return "UNKNOWN"
-                m = re.search(r"\bFN\d{1,2}\b", msg, flags=re.IGNORECASE)
-                return (m.group(0).upper() if m else "UNKNOWN")
-
-            # Chuyển validation_errors thành failed [{ma_tieu_chi, column, error_message}]
             if validation_errors:
-                for err in validation_errors:
-                    if hasattr(err, "to_dict"):
-                        e = err.to_dict()
-                        mtc = (e.get("ma_tieu_chi") or "").strip() or "UNKNOWN"
-                        msg = e.get("error_message") or e.get("error") or "validation_error"
-                        col = e.get("fn_field") or e.get("fld_code") or _infer_column_from_message(str(msg))
-                        if not col or col == "UNKNOWN":
-                            if "ma_tieu_chi" in str(msg).lower():
-                                col = "ma_tieu_chi"
-                        failed.append({"ma_tieu_chi": mtc, "column": col, "error_message": str(msg)})
-                    elif isinstance(err, dict):
-                        mtc = (err.get("ma_tieu_chi") or "").strip() or "UNKNOWN"
-                        msg = (
-                            err.get("error_message")
-                            or err.get("message")
-                            or err.get("error")
-                            or "validation_error"
-                        )
-                        col = (
-                            err.get("fn_field")
-                            or err.get("fld_code")
-                            or _infer_column_from_message(str(msg))
-                        )
-                        if not col or col == "UNKNOWN":
-                            if "ma_tieu_chi" in str(msg).lower():
-                                col = "ma_tieu_chi"
-                        failed.append({"ma_tieu_chi": mtc, "column": col, "error_message": str(msg)})
-                    else:
-                        msg = str(err)
-                        col = _infer_column_from_message(msg)
-                        failed.append({"ma_tieu_chi": "UNKNOWN", "column": col, "error_message": msg})
-
+                failed.extend(self._process_validation_errors(validation_errors))
                 # Có lỗi validate → ít nhất partial_success
                 status = "partial_success" if status == "success" else status
 
@@ -115,23 +73,9 @@ class DataHandler:
             if not details and failed and status == "success":
                 status = "error"
 
-            metadata = Metadata(
-                status=status,
-                timestamp=datetime.now().isoformat(),
-                request_id=request_id,
-                api_version=self.config.api_version,
-                total_time=total_time,
-            )
-
-            request_info = RequestInfo(
-                ma_don_vi=ma_don_vi, ma_bao_cao=ma_bao_cao, ky_du_lieu=ky_du_lieu
-            )
-
-            response_body = {
-                "anomalies": anomalies,     # [{ma_tieu_chi, list_anomaly}]
-                "failed": failed,           # [{ma_tieu_chi, column, error_message}]
-                "details": details,         # có thể bỏ nếu muốn tối ưu latency
-            }
+            metadata = self._create_metadata(request_id, status, total_time)
+            request_info = self._create_request_info(ma_don_vi, ma_bao_cao, ky_du_lieu)
+            response_body = self._create_response_body(anomalies, failed, details)
 
             return APIResponse(
                 metadata=metadata,
@@ -145,12 +89,87 @@ class DataHandler:
                 request_id, total_time, detailed_results
             )
 
+    def _infer_column_from_message(self, msg: str) -> str:
+        if not isinstance(msg, str):
+            return "UNKNOWN"
+        m = re.search(r"\bFN\d{1,2}\b", msg, flags=re.IGNORECASE)
+        return m.group(0).upper() if m else "UNKNOWN"
+
+    def _process_validation_error_item(
+        self, err, is_dict: bool = True
+    ) -> Dict[str, str]:
+        if is_dict:
+            e = err.to_dict() if hasattr(err, "to_dict") else err
+            mtc = (e.get("ma_tieu_chi") or "").strip() or "UNKNOWN"
+            msg = (
+                e.get("error_message")
+                or e.get("message")
+                or e.get("error")
+                or "validation_error"
+            )
+        else:
+            mtc = "UNKNOWN"
+            msg = str(err)
+
+        col = (
+            e.get("fn_field")
+            if is_dict
+            else (
+                None or e.get("fld_code")
+                if is_dict
+                else None or self._infer_column_from_message(str(msg))
+            )
+        )
+
+        if not col or col == "UNKNOWN":
+            if "ma_tieu_chi" in str(msg).lower():
+                col = "ma_tieu_chi"
+
+        return {"ma_tieu_chi": mtc, "column": col, "error_message": str(msg)}
+
+    def _process_validation_errors(
+        self, validation_errors: List
+    ) -> List[Dict[str, str]]:
+        failed = []
+        for err in validation_errors:
+            if hasattr(err, "to_dict") or isinstance(err, dict):
+                failed.append(self._process_validation_error_item(err, True))
+            else:
+                failed.append(self._process_validation_error_item(err, False))
+        return failed
+
+    def _create_metadata(
+        self, request_id: str, status: str, total_time: float
+    ) -> Metadata:
+        return Metadata(
+            status=status,
+            timestamp=datetime.now().isoformat(),
+            request_id=request_id,
+            api_version=self.config.api_version,
+            total_time=total_time,
+        )
+
+    def _create_request_info(
+        self, ma_don_vi: str, ma_bao_cao: str, ky_du_lieu: str
+    ) -> RequestInfo:
+        return RequestInfo(
+            ma_don_vi=ma_don_vi, ma_bao_cao=ma_bao_cao, ky_du_lieu=ky_du_lieu
+        )
+
+    def _create_response_body(
+        self, anomalies: List, failed: List, details: List
+    ) -> Dict[str, List]:
+        return {
+            "anomalies": anomalies,  # [{ma_tieu_chi, list_anomaly}]
+            "failed": failed,  # [{ma_tieu_chi, column, error_message}]
+            "details": details,  # có thể bỏ nếu muốn tối ưu latency
+        }
 
     def _create_detailed_error_response(
-            self,
-            request_id: str,
-            total_time: float,
-            detailed_results: Dict[str, Any],
+        self,
+        request_id: str,
+        total_time: float,
+        detailed_results: Dict[str, Any],
     ) -> APIResponse:
         metadata = Metadata(
             status="error",
@@ -170,35 +189,6 @@ class DataHandler:
             metadata=metadata,
             request_info=request_info,
             results={"anomalies": [], "failed_elements": [], "details": []},
-        )
-
-    # Thêm method mới cho detailed error response
-    def _create_detailed_error_response(
-        self,
-        request_id: str,
-        total_time: float,
-        detailed_results: Dict[str, Any],
-    ) -> APIResponse:
-        """Create detailed error response"""
-
-        metadata = Metadata(
-            status="error",
-            timestamp=datetime.now().isoformat(),
-            request_id=request_id,
-            api_version=self.config.api_version,
-            total_time=total_time,
-        )
-
-        request_info = RequestInfo(
-            ma_don_vi=detailed_results["results"][0]["ma_don_vi"],
-            ma_bao_cao=detailed_results["results"][0]["ma_bao_cao"],
-            ky_du_lieu=detailed_results["results"][0]["ky_du_lieu"],
-        )
-
-        return APIResponse(
-            metadata=metadata,
-            request_info=request_info,
-            results=[],
         )
 
     def _create_metadata_and_request_info(
@@ -249,7 +239,8 @@ class DataHandler:
                 prediction_errors.append(
                     PredictionError.from_validation_error(
                         {
-                            "error_message": "ma_tieu_chi field is required and cannot be empty",
+                            "error_message": "ma_tieu_chi "
+                            "field is required and cannot be empty",
                             "ma_tieu_chi": ma_tieu_chi,
                         }
                     )
@@ -264,7 +255,9 @@ class DataHandler:
                 prediction_errors.append(
                     PredictionError.from_validation_error(
                         {
-                            "error_message": f"Field code is missing for ma_tieu_chi: {ma_tieu_chi}",
+                            "error_message": f"Field code "
+                            f"is missing for ma_tieu_chi:"
+                            f" {ma_tieu_chi}",
                             "ma_tieu_chi": ma_tieu_chi,
                         }
                     )
@@ -340,9 +333,6 @@ class DataHandler:
                     detail=result.get("error", "Unknown system error"),
                 )
             )
-
-        # Combine all errors
-        all_errors = validation_errors + result_errors
 
         metadata = Metadata(
             status="error",

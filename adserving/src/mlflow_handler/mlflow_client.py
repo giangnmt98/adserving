@@ -4,10 +4,11 @@ MLflow Client with Connection Pooling
 This module provides an optimized MLflow client with connection pooling.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from mlflow.tracking import MlflowClient
 from urllib3.util.retry import Retry
+
 from adserving.src.utils.logger import get_logger
 
 
@@ -74,29 +75,63 @@ class MLflowClient:
             # Fallback to standard client
             return MlflowClient(tracking_uri=tracking_uri)
 
+    def _paginate_registered_models(self, max_per_page: int = 100) -> List[Any]:
+        """Fetch all registered models with pagination."""
+        all_models: List[Any] = []
+        page_token: Optional[str] = None
+        while True:
+            # MlflowClient.search_registered_models hỗ trợ page_token và max_results
+            result = self.client.search_registered_models(
+                max_results=max_per_page, page_token=page_token
+            )
+            # result trả về list + thuộc tính token (tuỳ phiên bản MLflow)
+            if not result:
+                break
+            all_models.extend(result)
+            # Lấy page_token tiếp theo (tuỳ SDK; nếu không có, dừng)
+            try:
+                page_token = result.token  # type: ignore[attr-defined]
+            except Exception:
+                page_token = None
+            if not page_token:
+                break
+        return all_models
+
     def get_production_models_with_versions(self) -> Dict[str, str]:
-        """Get production models with their versions"""
+        """Get production models with their versions (paginate all)."""
         try:
-            models_with_versions = {}
-            for rm in self.client.search_registered_models():
-                for mv in rm.latest_versions:
-                    if mv.current_stage.lower() == "production":
-                        models_with_versions[rm.name] = mv.version
-                        break
+            models_with_versions: Dict[str, str] = {}
+            # Lấy hết registered models qua pagination
+            for rm in self._paginate_registered_models(max_per_page=100):
+                # Lặp các latest_versions, lọc Production
+                for mv in getattr(rm, "latest_versions", []) or []:
+                    try:
+                        if str(mv.current_stage).lower() == "production":
+                            models_with_versions[rm.name] = mv.version
+                            break
+                    except Exception:
+                        continue
+            self.logger.info(
+                f"Discovered {len(models_with_versions)} Production models from MLflow."
+            )
             return models_with_versions
         except Exception as e:
             self.logger.error(f"Error getting production models with versions: {e}")
             return {}
 
     def get_production_models(self) -> List[str]:
-        """Get list of production models from MLflow"""
+        """Get list of production models from MLflow (paginate all)."""
         try:
-            models = []
-            for rm in self.client.search_registered_models():
-                for mv in rm.latest_versions:
-                    if mv.current_stage.lower() == "production":
-                        models.append(rm.name)
-                        break
+            models: List[str] = []
+            for rm in self._paginate_registered_models(max_per_page=100):
+                for mv in getattr(rm, "latest_versions", []) or []:
+                    try:
+                        if str(mv.current_stage).lower() == "production":
+                            models.append(rm.name)
+                            break
+                    except Exception:
+                        continue
+            self.logger.info(f"Discovered {len(models)} Production model names.")
             return models
         except Exception as e:
             self.logger.error(f"Error getting production models: {e}")
@@ -128,72 +163,16 @@ class MLflowClient:
             Returns empty dict if model not found or no parameters
         """
         try:
-            # Get model versions in Production stage
-            production_versions = self.client.get_latest_versions(
-                name=model_name, stages=[stages]
-            )
-
-            if not production_versions:
-                self.logger.warning(
-                    f"No Production version found for model {model_name}"
-                )
+            production_version = self._get_model_version(model_name, stages)
+            if not production_version:
                 return {}
-
-            # Get the first (should be only) production version
-            production_version = production_versions[0]
-            version_number = production_version.version
-            run_id = production_version.run_id
-
-            self.logger.debug(
-                f"Found Production model {model_name} version {version_number}"
-            )
 
             parameters = {}
 
-            # Priority 1: Get from model version tags
-            if hasattr(production_version, "tags") and production_version.tags:
-                parameters.update(production_version.tags)
-                self.logger.debug(
-                    f"Loaded {len(production_version.tags)} parameters from model version tags"
-                )
-
-            # Priority 2: Get from run data (params and tags)
-            try:
-                run = self.client.get_run(run_id)
-
-                # Add run parameters
-                if hasattr(run.data, "params") and run.data.params:
-                    parameters.update(run.data.params)
-                    self.logger.debug(
-                        f"Added {len(run.data.params)} parameters from run params"
-                    )
-
-                # Add run tags (may override model version tags if same key)
-                if hasattr(run.data, "tags") and run.data.tags:
-                    parameters.update(run.data.tags)
-                    self.logger.debug(
-                        f"Added {len(run.data.tags)} parameters from run tags"
-                    )
-
-            except Exception as e:
-                self.logger.warning(f"Could not fetch run data for {model_name}: {e}")
-
-            # Priority 3: Get from registered model tags (as fallback defaults)
-            try:
-                registered_model = self.client.get_registered_model(model_name)
-                if hasattr(registered_model, "tags") and registered_model.tags:
-                    # Only add if key doesn't exist (lower priority)
-                    for key, value in registered_model.tags.items():
-                        if key not in parameters:
-                            parameters[key] = value
-                    self.logger.debug(
-                        f"Added fallback parameters from registered model tags"
-                    )
-
-            except Exception as e:
-                self.logger.warning(
-                    f"Could not fetch registered model tags for {model_name}: {e}"
-                )
+            # Get parameters in priority order
+            parameters.update(self._get_version_parameters(production_version))
+            parameters.update(self._get_run_parameters(production_version.run_id))
+            parameters.update(self._get_model_parameters(model_name, parameters))
 
             self.logger.debug(
                 f"Loaded {len(parameters)} parameters for Production model {model_name}"
@@ -205,6 +184,74 @@ class MLflowClient:
                 f"Error getting Production model parameters for {model_name}: {e}"
             )
             return {}
+
+    def _get_model_version(self, model_name: str, stages: str):
+        production_versions = self.client.get_latest_versions(
+            name=model_name, stages=[stages]
+        )
+
+        if not production_versions:
+            self.logger.warning(f"No Production version found for model {model_name}")
+            return None
+
+        production_version = production_versions[0]
+        version_number = production_version.version
+
+        self.logger.debug(
+            f"Found Production model {model_name} version {version_number}"
+        )
+        return production_version
+
+    def _get_version_parameters(self, production_version) -> Dict:
+        parameters = {}
+        if hasattr(production_version, "tags") and production_version.tags:
+            parameters.update(production_version.tags)
+            self.logger.debug(
+                f"Loaded {len(production_version.tags)}"
+                f" parameters from model version tags"
+            )
+        return parameters
+
+    def _get_run_parameters(self, run_id: str) -> Dict:
+        parameters = {}
+        try:
+            run = self.client.get_run(run_id)
+
+            if hasattr(run.data, "params") and run.data.params:
+                parameters.update(run.data.params)
+                self.logger.debug(
+                    f"Added {len(run.data.params)} parameters from run params"
+                )
+
+            if hasattr(run.data, "tags") and run.data.tags:
+                parameters.update(run.data.tags)
+                self.logger.debug(
+                    f"Added {len(run.data.tags)} parameters from run tags"
+                )
+
+        except Exception as e:
+            self.logger.warning(f"Could not fetch run data: {e}")
+
+        return parameters
+
+    def _get_model_parameters(self, model_name: str, existing_params: Dict) -> Dict:
+        parameters = {}
+        try:
+            registered_model = self.client.get_registered_model(model_name)
+            if hasattr(registered_model, "tags") and registered_model.tags:
+                for key, value in registered_model.tags.items():
+                    if key not in existing_params:
+                        parameters[key] = value
+                self.logger.debug(
+                    "Added fallback parameters from registered model tags"
+                )
+
+        except Exception as e:
+            self.logger.warning(
+                f"Could not fetch registered model tags for {model_name}: {e}"
+            )
+
+        return parameters
 
     def get_threshold_parameters(self, model_name: str) -> float:
         """
@@ -237,7 +284,8 @@ class MLflowClient:
                     threshold_value = threshold_params[key]
                 except (ValueError, TypeError):
                     self.logger.warning(
-                        f"Could not convert {key}={all_params[key]} to float for model {model_name}"
+                        f"Could not convert {key}={all_params[key]}"
+                        f" to float for model {model_name}"
                     )
 
         return threshold_value

@@ -3,8 +3,8 @@
 Request processing utilities for pooled model deployments
 """
 
-from typing import Any, Dict, List, Optional
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import HTTPException
@@ -29,12 +29,16 @@ class RequestProcessor:
                     if "ma_tieu_chi" in data_item:
                         ma_tieu_chi = data_item["ma_tieu_chi"]
                         fn_fields = {
-                            k: v for k, v in data_item.items()
+                            k: v
+                            for k, v in data_item.items()
                             if k.startswith("FN") and k != "ma_tieu_chi"
                         }
-                        for fld_code in fn_fields.keys():
+                        for fld_code in fn_fields:
                             normalized_fld = self._normalize_field_code(fld_code)
-                            model_name = f"{ma_don_vi}_{ma_bao_cao}_{ma_tieu_chi}_{normalized_fld}"
+                            model_name = (
+                                f"{ma_don_vi}_{ma_bao_cao}"
+                                f"_{ma_tieu_chi}_{normalized_fld}"
+                            )
                             model_names.append(model_name)
 
         if not model_names and "model_name" in request:
@@ -49,8 +53,7 @@ class RequestProcessor:
         if number_part.isdigit():
             if len(number_part) == 1:
                 return f"FN0{number_part}"
-            else:
-                return f"FN{number_part}"
+            return f"FN{number_part}"
         return field_name.upper()
 
     def prepare_input_data(self, request: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -79,8 +82,11 @@ class RequestProcessor:
                 detail={
                     "error": {
                         "error_code": "EMPTY_REQUEST",
-                        "error_message": "Request không được rỗng. Định dạng hợp lệ: "
-                        "{'ma_don_vi': '...', 'ma_bao_cao': '...', 'ky_du_lieu': '...', 'data': [...]}"
+                        "error_message": (
+                            "Request không được rỗng. Định dạng hợp lệ: "
+                            "{'ma_don_vi': '...', 'ma_bao_cao': '...', "
+                            "'ky_du_lieu': '...', 'data': [...]}"
+                        ),
                     },
                     "field_path": "",
                     "timestamp": datetime.now().isoformat(),
@@ -91,13 +97,13 @@ class RequestProcessor:
         missing_fields = [field for field in required_fields if field not in request]
         if missing_fields:
             self.logger.error(f"Missing required fields: {missing_fields}")
-            # Trả lỗi theo từng field bị thiếu (ưu tiên liệt kê tất cả)
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": {
                         "error_code": "MISSING_REQUIRED_FIELD",
-                        "error_message": f"Thiếu trường bắt buộc: {', '.join(missing_fields)}",
+                        "error_message": f"Thiếu trường bắt buộc:"
+                        f" {', '.join(missing_fields)}",
                     },
                     "field_path": ",".join(missing_fields),
                     "timestamp": datetime.now().isoformat(),
@@ -121,12 +127,16 @@ class RequestProcessor:
                 detail={
                     "error": {
                         "error_code": "INVALID_DATA_TYPE",
-                        "error_message": f"Trường ma_don_vi phải là kiểu chuỗi (string), nhận được kiểu {type(ma_don_vi).__name__}",
+                        "error_message": (
+                            f"Trường ma_don_vi phải là kiểu chuỗi (string), "
+                            f"nhận được kiểu {type(ma_don_vi).__name__}"
+                        ),
                     },
                     "field_path": "ma_don_vi",
                     "timestamp": datetime.now().isoformat(),
                 },
             )
+
         if not ma_don_vi.strip():
             raise HTTPException(
                 status_code=400,
@@ -147,12 +157,16 @@ class RequestProcessor:
                 detail={
                     "error": {
                         "error_code": "INVALID_DATA_TYPE",
-                        "error_message": f"Trường ma_bao_cao phải là kiểu chuỗi (string), nhận được kiểu {type(ma_bao_cao).__name__}",
+                        "error_message": (
+                            f"Trường ma_bao_cao phải là kiểu chuỗi (string), "
+                            f"nhận được kiểu {type(ma_bao_cao).__name__}"
+                        ),
                     },
                     "field_path": "ma_bao_cao",
                     "timestamp": datetime.now().isoformat(),
                 },
             )
+
         if not ma_bao_cao.strip():
             raise HTTPException(
                 status_code=400,
@@ -174,7 +188,10 @@ class RequestProcessor:
                     "error": {
                         "error_code": "INVALID_DATA_TYPE",
                         "error_message": "Kiểu dữ liệu không hợp lệ",
-                        "error_details": f"Trường ky_du_lieu phải là kiểu chuỗi (string), nhận được kiểu {type(ky_du_lieu).__name__}",
+                        "error_details": (
+                            f"Trường ky_du_lieu phải là kiểu chuỗi (string), "
+                            f"nhận được kiểu {type(ky_du_lieu).__name__}"
+                        ),
                     },
                     "field_path": "ky_du_lieu",
                     "timestamp": datetime.now().isoformat(),
@@ -191,7 +208,10 @@ class RequestProcessor:
                     "error": {
                         "error_code": "INVALID_DATE_FORMAT",
                         "error_message": "Định dạng ngày không hợp lệ",
-                        "error_details": f"Trường ky_du_lieu phải có format YYYY-MM-DD (ví dụ: 2024-01-01), nhận được: {ky_du_lieu}",
+                        "error_details": (
+                            f"Trường ky_du_lieu phải có format YYYY-MM-DD "
+                            f"(ví dụ: 2024-01-01), nhận được: {ky_du_lieu}"
+                        ),
                     },
                     "field_path": "ky_du_lieu",
                     "timestamp": datetime.now().isoformat(),
@@ -200,13 +220,18 @@ class RequestProcessor:
 
     def _validate_data_list(self, data_list: Any) -> None:
         if not isinstance(data_list, list):
-            self.logger.error(f"Invalid data format: expected list, got {type(data_list)}")
+            self.logger.error(
+                f"Invalid data format: expected list, got {type(data_list)}"
+            )
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": {
                         "error_code": "INVALID_DATA_TYPE",
-                        "error_message": f"Trường data phải là kiểu mảng (array), nhận được kiểu {type(data_list).__name__}",
+                        "error_message": (
+                            f"Trường data phải là kiểu mảng (array), "
+                            f"nhận được kiểu {type(data_list).__name__}"
+                        ),
                     },
                     "field_path": "data",
                     "timestamp": datetime.now().isoformat(),
@@ -220,7 +245,9 @@ class RequestProcessor:
                 detail={
                     "error": {
                         "error_code": "EMPTY_REQUIRED_FIELD",
-                        "error_message": "Trường data không được rỗng, phải chứa ít nhất một phần tử",
+                        "error_message": (
+                            "Trường data không được rỗng, phải chứa ít nhất một phần tử"
+                        ),
                     },
                     "field_path": "data",
                     "timestamp": datetime.now().isoformat(),
@@ -245,7 +272,12 @@ class RequestProcessor:
 
                 prediction_tasks.append(
                     self._create_prediction_task(
-                        ma_don_vi, ma_bao_cao, ma_tieu_chi, fn_field, gia_tri, ky_du_lieu
+                        ma_don_vi,
+                        ma_bao_cao,
+                        ma_tieu_chi,
+                        fn_field,
+                        gia_tri,
+                        ky_du_lieu,
                     )
                 )
         return prediction_tasks
@@ -253,14 +285,19 @@ class RequestProcessor:
     def _validate_data_item(self, data_item: Dict, index: int) -> None:
         if not isinstance(data_item, dict):
             self.logger.error(
-                f"Invalid data item at index {index}: expected dict, got {type(data_item)}"
+                f"Invalid data item at index {index}: expected dict,"
+                f" got {type(data_item)}"
             )
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": {
                         "error_code": "INVALID_DATA_TYPE",
-                        "error_message": f"Phần tử thứ {index + 1} trong data phải là kiểu đối tượng (object), nhận được kiểu {type(data_item).__name__}",
+                        "error_message": (
+                            f"Phần tử thứ {index + 1} "
+                            f"trong data phải là kiểu đối tượng "
+                            f"(object), nhận được kiểu {type(data_item).__name__}"
+                        ),
                     },
                     "field_path": f"data[{index}]",
                     "timestamp": datetime.now().isoformat(),
@@ -275,7 +312,10 @@ class RequestProcessor:
                 detail={
                     "error": {
                         "error_code": "MISSING_REQUIRED_FIELD",
-                        "error_message": f"Data item tại vị trí {index + 1} thiếu trường bắt buộc 'ma_tieu_chi'",
+                        "error_message": (
+                            f"Data item tại vị trí {index + 1} thiếu trường bắt buộc "
+                            "'ma_tieu_chi'"
+                        ),
                     },
                     "field_path": f"data[{index}].ma_tieu_chi",
                     "timestamp": datetime.now().isoformat(),
@@ -288,7 +328,10 @@ class RequestProcessor:
                 detail={
                     "error": {
                         "error_code": "INVALID_DATA_TYPE",
-                        "error_message": f"Trường ma_tieu_chi tại vị trí {index + 1} phải là chuỗi không rỗng",
+                        "error_message": (
+                            f"Trường ma_tieu_chi tại vị trí {index + 1} phải là chuỗi "
+                            "không rỗng"
+                        ),
                     },
                     "field_path": f"data[{index}].ma_tieu_chi",
                     "timestamp": datetime.now().isoformat(),
@@ -300,14 +343,18 @@ class RequestProcessor:
         fn_fields = {k: v for k, v in data_item.items() if k.startswith("FN")}
         if not fn_fields:
             self.logger.error(
-                f"No FN fields found in data item at index {index}. Available: {list(data_item.keys())}"
+                f"No FN fields found in data item at index {index}. "
+                f"Available: {list(data_item.keys())}"
             )
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": {
                         "error_code": "MISSING_REQUIRED_FIELD",
-                        "error_message": f"Phần tử thứ {index + 1} phải chứa ít nhất một trường FN (FN01, FN02, ...)",
+                        "error_message": (
+                            f"Phần tử thứ {index + 1} phải chứa ít nhất một trường FN "
+                            "(FN01, FN02, ...)"
+                        ),
                     },
                     "field_path": f"data[{index}]",
                     "timestamp": datetime.now().isoformat(),

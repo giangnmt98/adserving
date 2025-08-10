@@ -5,18 +5,16 @@ Core Service Endpoints (Health, Readiness, Service Info)
 from datetime import datetime
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from ray import serve
 
 from adserving.src.config.config_manager import get_config
 from adserving.src.utils.logger import get_logger
 
-from .api_dependencies import (
-    service_start_time,
-    service_readiness,  # THÊM: fallback trạng thái sẵn sàng
-)
-
+from .api_dependencies import \
+    service_readiness  # THÊM: fallback trạng thái sẵn sàng
+from .api_dependencies import service_start_time
 from .response_model import HealthResponse, ServiceInfoResponse
 
 logger = get_logger()
@@ -26,8 +24,7 @@ router = APIRouter()
 
 
 @router.get("/", response_model=ServiceInfoResponse)
-async def service_info(
-):
+async def service_info():
     """Get service information and status"""
     try:
         uptime = datetime.now() - service_start_time
@@ -84,8 +81,7 @@ async def service_info(
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check(
-):
+async def health_check():
     """
     Comprehensive health check phù hợp hệ thống:
     - Ưu tiên trạng thái Ray Serve app 'preloaded_model_server'.
@@ -99,7 +95,6 @@ async def health_check(
         uptime_str = str(uptime).split(".")[0]
 
         # 1) Mặc định các thống kê rỗng/an toàn
-        cache_stats: Dict[str, Any] = {}
         deployment_stats: Dict[str, Any] = {}
         models_loaded = 0
 
@@ -140,15 +135,14 @@ async def health_check(
             )
 
         # 5) Xác định status chung
-        total_models = (
-            int(service_readiness.get("models_loaded", 0))
-            + int(service_readiness.get("models_failed", 0))
+        total_models = int(service_readiness.get("models_loaded", 0)) + int(
+            service_readiness.get("models_failed", 0)
         )
         has_failed = int(service_readiness.get("models_failed", 0)) > 0
 
         # Quy tắc trả mã:
         # - 503 nếu Serve chưa sẵn sàng.
-        # - 206 nếu có failed_models > 0 hoặc có cảnh báo nhẹ (Serve sẵn sàng nhưng có lỗi nhỏ).
+        # - 206 nếu có failed_models > 0 hoặc có cảnh báo.
         # - 200 nếu hoàn toàn healthy.
         if not serve_ready:
             status_code = 503
@@ -178,4 +172,3 @@ async def health_check(
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
-

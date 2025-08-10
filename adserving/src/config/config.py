@@ -7,28 +7,12 @@ classes and functions from the modular structure.
 
 # Import everything from the new modular structure
 from . import *
-
 # Maintain backward compatibility
-from .config_manager import (
-    Config,
-    _global_config,
-    create_sample_config,
-    get_config,
-    load_config,
-    set_config,
-)
-from .core_configs import (
-    MLflowConfig,
-    RayConfig,
-)
+from .config_manager import (Config, _global_config, create_sample_config,
+                             get_config, load_config, set_config)
+from .system_configs import LoggingConfig, MonitoringConfig, SecurityConfig
 
 # REMOVED: Direct import that causes circular dependency
-
-from .system_configs import (
-    LoggingConfig,
-    MonitoringConfig,
-    SecurityConfig,
-)
 
 
 # Module docstring for documentation
