@@ -15,6 +15,13 @@ from adserving.src.datahandler.models import APIResponse, PredictionRequest
 from adserving.src.deployment.request_processor import RequestProcessor
 from adserving.src.utils.logger import get_logger
 
+# [NEW] Tích hợp audit emit (training/inference)
+from adserving.src.audit.integration import (
+    build_training_features,
+    on_inference_done,
+    on_request_parsed,
+)
+
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic.type_adapter")
 
 logger = get_logger()
@@ -69,23 +76,83 @@ async def predict(
     start = time.time()
 
     try:
+        # 1) Parse input gốc
         raw_req = await _extract_raw_request(request)
+
+        # 2) Chuẩn hóa/validate bằng DataHandler
         processed = await handler.process_request(request)
+
+        # [NEW] 2.1) Emit training record (best-effort, không chặn)
+        # - Xây dựng features rút gọn phục vụ training
+        features = build_training_features(raw_req)
+        # - Nếu hệ thống có cơ chế consent, truyền vào đây; hiện mặc định {}
+        consent_flags: Dict[str, Any] = {}
+        on_request_parsed(
+            request_id=req_id,
+            req_body=raw_req,
+            features=features,
+            consent=consent_flags,
+        )
+
+        # 3) Chuẩn bị task infer
         prediction_tasks = await _prepare_prediction_tasks(raw_req)
         tasks, failed_local = await _build_float_tasks(prediction_tasks)
+
+        # 4) Gọi remote model phục vụ dự đoán
         details, failed_remote = await _get_prediction_results(tasks)
+
+        # 5) Tổng hợp lỗi + anomalies
         failed = _process_failures(failed_local, failed_remote)
         anomalies = _process_anomalies(details)
 
         total_time = time.time() - start
         status = _determine_status(details, failed)
 
+        # [NEW] 5.1) Emit inference results (best-effort, không chặn)
+        # - Với các item thành công trong details: emit trạng thái success
+        for item in details:
+            print(item)
+            try:
+                # item kỳ vọng gồm: model_name, ma_tieu_chi, fld_code, is_anomaly, anomaly_score,
+                # anomaly_threshold, processing_time, model_version, status, error_message
+                on_inference_done(
+                    request_id=req_id,
+                    result=item,
+                    total_time=float(item.get("processing_time") or total_time),
+                )
+            except Exception as e:
+               logger.error(f"Failed to emit inference result: {e}")
+
+        # - Với các phần tử lỗi: emit trạng thái error (tối thiểu)
+        for f in failed_local + failed_remote:
+            try:
+                mtc = f.get("ma_tieu_chi")
+                fld = f.get("fld_code")
+                err = f.get("error_details") or f.get("error_message") or f.get("error") or "prediction_failed"
+                on_inference_done(
+                    request_id=req_id,
+                    result={
+                        "model_name": f.get("model_name", "unknown"),
+                        "ma_tieu_chi": mtc,
+                        "fld_code": fld,
+                        "is_anomaly": False,
+                        "anomaly_score": None,
+                        "anomaly_threshold": None,
+                        "processing_time": total_time,
+                        "model_version": None,
+                        "status": "error",
+                        "error_message": err,
+                    },
+                    total_time=total_time,
+                )
+            except Exception:
+                pass
+
         response_payload = {
             "status": status,
             "anomalies": anomalies,
             "failed": failed,
         }
-
 
         return await handler.format_response(
             request_id=req_id,

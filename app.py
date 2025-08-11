@@ -1,6 +1,7 @@
 # Python
 import asyncio
 import os
+import threading
 
 import uvicorn
 from fastapi import FastAPI
@@ -16,11 +17,33 @@ from adserving.src.api.core_endpoints import router as core_router
 from adserving.src.api import api_dependencies
 from adserving.src.utils.exception_handlers import setup_exception_handlers
 from adserving.src.datahandler.data_handler import DataHandler
-
+from adserving.src.audit.runner import start_audit_workers
 
 logger = get_logger()
 app = FastAPI(title="Preloaded MLflow Serving", version="1.0.0")
 setup_exception_handlers(app)
+
+# Cờ đảm bảo không khởi động workers nhiều lần trong cùng process
+_AUDIT_WORKERS_STARTED = False
+_AUDIT_LOCK = threading.Lock()
+
+
+def _start_audit_workers_once() -> None:
+    global _AUDIT_WORKERS_STARTED
+    with _AUDIT_LOCK:
+        if _AUDIT_WORKERS_STARTED:
+            return
+        if os.getenv("AUDIT_WORKERS_ENABLED", "true").lower() not in ("1", "true", "yes", "y"):
+            logger.info("Audit workers are disabled by AUDIT_WORKERS_ENABLED.")
+            return
+        try:
+            # Khởi động Ray Actors tiêu thụ Redis Streams và ghi PostgreSQL (non-blocking)
+            start_audit_workers()
+            _AUDIT_WORKERS_STARTED = True
+            logger.info("Audit workers started on app startup.")
+        except Exception as e:
+            # Không để lỗi worker ảnh hưởng quá trình khởi động app
+            logger.warning(f"Failed to start audit workers: {e}")
 
 
 @app.on_event("startup")
@@ -64,6 +87,9 @@ async def on_startup() -> None:
     handle = serve.get_app_handle("preloaded_model_server")
     logger.info("Waiting for preloaded_model_server to be ready...")
 
+    # Khởi chạy audit workers ở nền, không chặn luồng khởi tạo model server
+    threading.Thread(target=_start_audit_workers_once, daemon=True).start()
+
     ready = False
     models_loaded = 0
     for _ in range(600):
@@ -94,11 +120,10 @@ async def on_startup() -> None:
     )
 
 
-
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     try:
-        sys = globals().get('RUNTIME_ASYNC_SYS')
+        sys = globals().get("RUNTIME_ASYNC_SYS")
         if sys:
             await sys.close()
     except Exception:

@@ -172,3 +172,60 @@ class SecurityConfig:
     allowed_model_patterns: List[str] = field(default_factory=lambda: ["*"])
     enable_audit_logging: bool = True
     session_timeout: int = 3600  # 1 hour
+
+@dataclass
+class RedisStreamsConfig:
+    training_data: str = "training_data"
+    inference_results: str = "inference_results"
+    dlq: Optional[str] = "audit_dlq"
+    max_stream_length: int = 1_000_000
+
+
+@dataclass
+class RedisConsumerConfig:
+    group_name: str = "adserving_consumers"
+    training_consumer_prefix: str = "trainw"
+    inference_consumer_prefix: str = "inferw"
+    batch_size: int = 200
+    block_time_ms: int = 100
+    max_retries: int = 5
+    idle_timeout_ms: int = 30_000
+
+
+@dataclass
+class RedisConfig:
+    host: str = "127.0.0.1"
+    port: int = 6379
+    db: int = 0
+    password: Optional[str] = None
+    socket_timeout: float = 0.1
+    socket_connect_timeout: float = 0.05
+    retry_on_timeout: bool = True
+    health_check_interval: int = 15
+
+    streams: RedisStreamsConfig = field(default_factory=RedisStreamsConfig)
+    consumer: RedisConsumerConfig = field(default_factory=RedisConsumerConfig)
+
+
+@dataclass
+class DatabaseConfig:
+    host: str = "127.0.0.1"
+    port: int = 5432
+    name: str = "postgres"
+    user: str = "postgres"
+    password: Optional[str] = None
+    min_connections: int = 5
+    max_connections: int = 20
+    command_timeout: int = 60
+
+@dataclass
+class AuditSamplingConfig:
+    training_rate: float = 0.2
+    inference_rate: float = 1.0
+
+
+@dataclass
+class AuditConfig:
+    enabled: bool = True
+    sampling: AuditSamplingConfig = AuditSamplingConfig()
+    redact_pii: bool = True

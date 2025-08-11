@@ -59,57 +59,50 @@ monitoring:
 security:
   enable_cors: true
 
-async_processing:
-  enabled: true             # Bật/tắt tích hợp async (fire-and-forget từ API)
-  default_model_name: "default_model"
+# YAML
+audit:
+  enabled: true
+  sampling:
+    training_rate: 0.2
+    inference_rate: 1.0
+  redact_pii: true
 
-#  # Redis Streams (producer)
-#  redis:
-#    host: "127.0.0.1"
-#    port: 6379
-#    db: 0
-#    password: ""           # để trống nếu không dùng
-#    socket_timeout: 2.0
-#    socket_connect_timeout: 1.0
-#    retry_on_timeout: true
-#    connection_pool_max_connections: 32
-#    health_check_interval: 15
-#
-#  # Streams names & controls
-#  streams:
-#    training_data: "training_data"
-#    inference_results: "inference_results"
-#    batch_data: "batch_data"
-#    max_stream_length: 1000000
-#    trim_interval_seconds: 60
-#    monitoring_enabled: true
-#    monitoring_interval_seconds: 30
-#
-#  # Consumers/workers (chạy ở process/container riêng)
-#  consumer:
-#    group_name: "adserving_consumers"
-#    consumer_name_prefix: "worker"
-#    batch_size: 128
-#    block_time_ms: 100
-#    max_retries: 3
-#    retry_delay_seconds: 2
-#    processing_timeout_seconds: 30
-#    max_pending_messages: 10000
-#    health_check_interval: 30
-#    num_workers: 2
-#
-#  # PostgreSQL (asyncpg) cho DB layer
-#  database:
-#    host: "127.0.0.1"
-#    port: 5432
-#    name: "adserving"
-#    user: "postgres"
-#    password: "postgres"
-#    min_connections: 5
-#    max_connections: 20
-#    command_timeout: 60
-#    server_settings: {}
+redis:
+  host: "127.0.0.1"
+  port: 6379
+  db: 0
+  password: "DsteamIC2025"
+  socket_timeout: 0.1
+  socket_connect_timeout: 0.05
+  retry_on_timeout: true
+  streams:
+    training_data: "training_data"
+    inference_results: "inference_results"
+    dlq: "audit_dlq"
+    max_stream_length: 1000000
+  consumer:
+    group_name: "adserving_consumers"
+    training_consumer_prefix: "trainw"
+    inference_consumer_prefix: "inferw"
+    batch_size: 200
+    block_time_ms: 100
+    max_retries: 5
+    idle_timeout_ms: 30000
 
+database:
+  host: "127.0.0.1"
+  port: 5432
+  name: "postgres"
+  user: "admin"
+  password: "admin"
+  min_connections: 5
+  max_connections: 20
+  command_timeout: 60
+
+ray_workers:
+  training_workers: 2
+  inference_workers: 2
+  flush_interval_ms: 200
 
 api:
   # Host/port FastAPI (uvicorn)

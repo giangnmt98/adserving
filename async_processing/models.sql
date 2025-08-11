@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS infer_result (
         fld_code TEXT,
         is_anomaly BOOLEAN DEFAULT FALSE,
         anomaly_score FLOAT,
-        threshold FLOAT,
+        anomaly_threshold FLOAT,
         processing_time INTEGER,
         model_version VARCHAR(100),
         status VARCHAR(50) DEFAULT 'success',
