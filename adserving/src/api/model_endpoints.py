@@ -11,13 +11,18 @@ and Ray Serve for model serving.
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 from ray import serve
 
-from adserving.src.api.response_model import ModelInfoResponse
+from adserving.src.api.models import (
+    AnomalyThresholdUpdateRequest,
+    ModelInfoResponse,
+    ParameterHistoryResponse,
+    ParameterUpdateRequest,
+    ParameterValidationResponse,
+    RollbackRequest,
+)
 from adserving.src.config.config import get_config
 from adserving.src.mlflow_handler.mlflow_client import (
     MLflowClient as WrappedMLflowClient,
@@ -55,44 +60,6 @@ def _get_param_updater() -> MLflowParameterUpdater:
         raise HTTPException(
             status_code=500, detail=f"Failed to initialize MLflow updater: {e}"
         )
-
-
-# Request/Response models for parameter management
-class ParameterUpdateRequest(BaseModel):
-    """Request model for updating model parameters"""
-
-    parameters: Dict[str, float]
-    comment: Optional[str] = None
-
-
-class AnomalyThresholdUpdateRequest(BaseModel):
-    """Request model for updating anomaly threshold"""
-
-    threshold: float
-    comment: Optional[str] = None
-
-
-class RollbackRequest(BaseModel):
-    """Request model for rolling back model version"""
-
-    model_name: str
-    target_version: str
-
-
-class ParameterValidationResponse(BaseModel):
-    """Response model for parameter validation"""
-
-    valid: bool
-    errors: List[str] = []
-    warnings: List[str] = []
-
-
-class ParameterHistoryResponse(BaseModel):
-    """Response model for parameter update history"""
-
-    model_name: str
-    updates: List[Dict]
-    total_count: int
 
 
 @router.get("/models/{model_name}/info", response_model=ModelInfoResponse)
@@ -353,24 +320,3 @@ async def warm_model(model_name: str):
         raise HTTPException(
             status_code=500, detail=f"Failed to warm up model: {str(e)}"
         )
-
-
-@router.delete("/models/{model_name}/cache")
-async def evict_model_from_cache(model_name: str):
-    """Evict model khỏi cache của Serve."""
-    try:
-        handle = _get_serve_handle()
-        result = await handle.evict_model.remote(model_name)
-        if not isinstance(result, dict):
-            raise HTTPException(status_code=500, detail="Invalid evict result")
-        status = result.get("status", "error")
-        message = result.get("message", "Evict failed")
-        return {
-            "status": status,
-            "model_name": model_name,
-            "timestamp": datetime.now().isoformat(),
-            "message": message,
-        }
-    except Exception as e:
-        logger.error(f"Error evicting model {model_name}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to evict model: {str(e)}")

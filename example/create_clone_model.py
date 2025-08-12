@@ -216,7 +216,7 @@ def train_clone_task(
 
 def main() -> None:
     data_path = os.getenv("DATA_PATH", "bao_cao_dulieu_not_none.csv")
-    clones_per_combo = int(os.getenv("CLONES_PER_COMBO", "2"))
+    clones_per_combo = int(os.getenv("CLONES_PER_COMBO", "55"))
     max_workers = int(os.getenv("MAX_WORKERS", "16"))
 
     if not os.path.exists(data_path):

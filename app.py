@@ -129,11 +129,19 @@ async def on_startup() -> None:
     logger.info("Application startup completed successfully")
 
 
+@app.on_event("shutdown")
+async def on_shutdown():
+    """Xử lý sự kiện tắt ứng dụng."""
+    try:
+        os.system("ray stop --force")
+        logger.info("Ray server stopped successfully")
+    except Exception as e:
+        logger.error(f"Failed to stop Ray server: {e}")
+
+
 def main() -> None:
     """Hàm main để khởi chạy ứng dụng."""
     # Cài đặt cleanup handlers ngay từ đầu
-    # install_termination_handlers()
-
     try:
         cfg = get_config()
         host = (cfg.api.host if getattr(cfg, "api", None) else None) or cfg.api_host

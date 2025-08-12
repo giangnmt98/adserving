@@ -279,6 +279,6 @@ def _determine_status(
     """Determine overall status based on prediction details and failures."""
     if details and not failed:
         return "success"
-    elif details:
+    if details:
         return "partial_success"
     return "error"

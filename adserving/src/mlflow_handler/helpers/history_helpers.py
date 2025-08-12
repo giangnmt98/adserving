@@ -91,12 +91,10 @@ def get_model_version_parameters(
 
         if hasattr(run.data, "params") and run.data.params:
             return dict(run.data.params)
-        else:
-            return {}
-
     except Exception as e:
         logger.error(f"Error getting parameters for {model_name} v{version}: {e}")
         return {}
+    return {}
 
 
 def compare_parameter_versions(

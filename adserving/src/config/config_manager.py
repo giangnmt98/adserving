@@ -9,13 +9,10 @@ consistent way regardless of the Python version being used.
 
 from __future__ import annotations
 
-import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
-
-import yaml
 
 from .models import (
     APIGroupConfig,
@@ -34,6 +31,7 @@ from .models import (
     ServeHTTPConfig,
     WatcherConfig,
 )
+from .utils import load_data_from_file, process_config_section
 
 
 @dataclass
@@ -75,7 +73,6 @@ class Config:
     def __post_init__(self) -> None:
         """Initialize configuration after dataclass creation and sync API settings."""
         self._load_from_environment()
-
         # Đồng bộ nhóm api -> các trường back-compat
         if self.api:
             self.api_host = self.api.host or self.api_host
@@ -225,15 +222,7 @@ class Config:
         config_path = Path(config_path)
         if not config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
-        with open(config_path, "r", encoding="utf-8") as f:
-            if config_path.suffix.lower() in [".yaml", ".yml"]:
-                data = yaml.safe_load(f)
-            elif config_path.suffix.lower() == ".json":
-                data = json.load(f)
-            else:
-                raise ValueError(
-                    f"Unsupported configuration file format: {config_path.suffix}"
-                )
+        data = load_data_from_file(config_path)
         return cls.from_dict(data)
 
     @classmethod
@@ -241,33 +230,23 @@ class Config:
         """Create configuration from dictionary data."""
         config_data: Dict[str, Any] = {}
 
-        def _wrap(d: Dict[str, Any], t):
-            try:
-                return t(**(d or {}))
-            except Exception:
-                return t()
-
-        def _process_config(key: str, value: Dict[str, Any]) -> Any:
-            config_map = {
-                "mlflow": MLflowConfig,
-                "ray": RayConfig,
-                "monitoring": MonitoringConfig,
-                "logging": LoggingConfig,
-                "security": SecurityConfig,
-                "preload": PreloadConfig,
-                "watcher": WatcherConfig,
-                "api": APIGroupConfig,
-                "audit": AuditConfig,
-                "redis": RedisConfig,
-                "database": DatabaseConfig,
-                "serve": ServeConfig,
-                "http": ServeHTTPConfig,
-                "autoscaling": ServeAutoscalingConfig,
-                "server_deployment": ServeDeploymentConfig,
-            }
-            if key in config_map:
-                return _wrap(value, config_map[key])
-            return None
+        config_map = {
+            "mlflow": MLflowConfig,
+            "ray": RayConfig,
+            "monitoring": MonitoringConfig,
+            "logging": LoggingConfig,
+            "security": SecurityConfig,
+            "preload": PreloadConfig,
+            "watcher": WatcherConfig,
+            "api": APIGroupConfig,
+            "audit": AuditConfig,
+            "redis": RedisConfig,
+            "database": DatabaseConfig,
+            "serve": ServeConfig,
+            "http": ServeHTTPConfig,
+            "autoscaling": ServeAutoscalingConfig,
+            "server_deployment": ServeDeploymentConfig,
+        }
 
         allowed_scalar_top_level = {
             "api_host",
@@ -280,7 +259,7 @@ class Config:
 
         for key, value in (data or {}).items():
             if isinstance(value, dict):
-                config_value = _process_config(key, value)
+                config_value = process_config_section(key, value, config_map)
                 if config_value is not None:
                     config_data[key] = config_value
                 continue
@@ -288,40 +267,6 @@ class Config:
                 config_data[key] = value
 
         return cls(**config_data)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary."""
-        return asdict(self)
-
-    def to_file(self, config_path: Union[str, Path], format: str = "yaml") -> None:
-        """Save configuration to file in YAML or JSON format."""
-        config_path = Path(config_path)
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        data = self.to_dict()
-        with open(config_path, "w", encoding="utf-8") as f:
-            if format.lower() in ["yaml", "yml"]:
-                yaml.dump(data, f, default_flow_style=False, indent=2)
-            elif format.lower() == "json":
-                json.dump(data, f, indent=2, default=str)
-            else:
-                raise ValueError(f"Unsupported format: {format}")
-
-    def get_ray_init_config(self) -> Dict[str, Any]:
-        """Get Ray initialization configuration dictionary."""
-        config: Dict[str, Any] = {
-            "address": self.ray.address,
-            "dashboard_host": self.ray.dashboard_host,
-            "dashboard_port": self.ray.dashboard_port,
-        }
-        if getattr(self.ray, "object_store_memory", None):
-            config["object_store_memory"] = self.ray.object_store_memory
-        if self.ray.num_cpus is not None:
-            config["num_cpus"] = self.ray.num_cpus
-        if self.ray.num_gpus is not None:
-            config["num_gpus"] = self.ray.num_gpus
-        if self.ray.runtime_env:
-            config["runtime_env"] = self.ray.runtime_env
-        return config
 
 
 # Global configuration instance
@@ -342,12 +287,6 @@ def load_config(config_path: Optional[Union[str, Path]] = None) -> Config:
 
     # Return default configuration
     return Config()
-
-
-def create_sample_config(output_path: Union[str, Path] = "config.yaml") -> None:
-    """Create a sample configuration file"""
-    config = Config()
-    config.to_file(output_path, "yaml")
 
 
 def get_config() -> Config:

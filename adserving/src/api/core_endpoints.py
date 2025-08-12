@@ -12,9 +12,8 @@ from ray import serve
 from adserving.src.config.config import get_config
 from adserving.src.utils.logger import get_logger
 
-from .api_dependencies import service_readiness  # THÊM: fallback trạng thái sẵn sàng
-from .api_dependencies import service_start_time
-from .response_model import HealthResponse, ServiceInfoResponse
+from .api_dependencies import service_readiness, service_start_time
+from .models import HealthResponse, ServiceInfoResponse
 
 logger = get_logger()
 router = APIRouter()
@@ -47,21 +46,15 @@ async def service_info():
                 # Parameter Management Endpoints (mới bổ sung)
                 "production_models": "GET /models/production",
                 "model_parameters": "GET /models/{model_name}/parameters",
-                "validate_parameters": "POST /models/{model_name}/parameters/validate",
                 "update_threshold": "PUT /models/{model_name}/threshold",
                 "update_parameters": "PUT /models/{model_name}/parameters",
                 "rollback_model": "POST /models/{model_name}/rollback",
                 "parameter_history": "GET /models/{model_name}/history",
                 "batch_threshold_update": "POST /models/batch-threshold-update",
-                "warm_model": "POST /models/{model_name}/warm",
-                "evict_model": "DELETE /models/{model_name}/cache",
-                "api_documentation": "GET /docs",
-                "openapi_schema": "GET /openapi.json",
-                "redoc_documentation": "GET /redoc",
             },
             timestamp=datetime.now().isoformat(),
             description=(
-                "Enhanced Anomaly Detection serving system for hundreds of models "
+                "Anomaly Detection serving system for hundreds of models "
                 "with tiered loading, parameter management, and intelligent routing"
             ),
             features=[

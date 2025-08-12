@@ -9,14 +9,7 @@ classes and functions from the modular structure.
 from . import *
 
 # Maintain backward compatibility
-from .config_manager import (
-    Config,
-    _global_config,
-    create_sample_config,
-    get_config,
-    load_config,
-    set_config,
-)
+from .config_manager import Config, _global_config, get_config, load_config, set_config
 
 # Module docstring for documentation
 __doc__ = """
