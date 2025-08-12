@@ -358,16 +358,3 @@ class PreloadedModelServer:
         outs.sort(key=lambda x: x[0])
         results = [o[1] for o in outs]
         return {"results": results, "failed_elements": failed}
-
-    #
-    # # Convenience admin APIs
-    # def get_model_details(self, model_name: str) -> Dict[str, Any]:
-    #     loaded = model_name in self.models_active
-    #     """Get model details, including loaded status,
-    #     model version, and anomaly threshold."""
-    #     return {
-    #         "model_name": model_name,
-    #         "loaded": loaded,
-    #         "model_version": self.model_versions.get(model_name),
-    #         "anomaly_threshold": self.thresholds.get(model_name),
-    #     }

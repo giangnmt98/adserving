@@ -1,33 +1,22 @@
 #!/usr/bin/env python3
 """Setup script for adserving package."""
 
-import os
+from pathlib import Path
 
 from setuptools import find_packages, setup
 
-# Read the contents of README file
-this_directory = os.path.abspath(os.path.dirname(__file__))
-with open(os.path.join(this_directory, "README.md"), encoding="utf-8") as f:
-    long_description = f.read()
+# Read file requirements.txt
+BASE_DIR = Path(__file__).parent
+with open(Path(BASE_DIR, "requirements.txt")) as file:
+    required_packages = [ln.strip() for ln in file.readlines()]
 
-# Core dependencies (production)
-install_requires = [
-    "mlflow==3.1.4",
-    "ray[serve]==2.48.0",
-    "pandas>=1.5.0",
-    "numpy>=1.24.0",
-    "scikit-learn>=1.3.0",
-    "psutil>=5.9.0",
-    "GPUtil>=1.4.0",
-    "PyYAML>=6.0",
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.0",
-    "prometheus-client>=0.19.0",
-    "structlog>=23.2.0",
-]
+# Read the contents of the README file
+with open(Path(BASE_DIR, "README.md"), encoding="utf-8") as f:
+    long_description = f.read()
 
 # Development dependencies
 dev_requires = [
+    "pytest>=7.4.0",
     "black==24.1.1",
     "flake8==7.0.0",
     "mypy==1.8.0",
@@ -58,9 +47,9 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
     python_requires=">=3.11",
-    install_requires=install_requires,
+    install_requires=required_packages,
     extras_require={
-        "dev": dev_requires,
+        "dev": dev_requires + required_packages,
     },
     include_package_data=True,
     package_data={

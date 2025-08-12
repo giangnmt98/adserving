@@ -1,39 +1,43 @@
-# MLOps Serve Dependencies
+# Anomaly Detection Serve Dependencies
+
+fastapi==0.116.1       # Fast API framework for serving
+GPUtil>=1.4.0          # GPU monitoring utilities
+#-------------------
 # Core ML and MLOps
-mlflow
-ray[serve]==2.48.0
-pandas>=1.5.0
-numpy>=1.24.0
-scikit-learn>=1.3.0
+#-------------------
+mlflow==3.1.4          # Model lifecycle management
+numpy>=1.24.0          # Numerical computing
+pandas>=1.5.0          # Data manipulation and analysis
 
-# Web framework and API - REMOVED (uvicorn/FastAPI dependencies eliminated)
+#--------------------------------
+# Logging & Monitoring
+#--------------------------------
+prometheus-client>=0.19.0 # Metrics collection
 
-# System monitoring
-psutil>=5.9.0
-GPUtil>=1.4.0
+#----------------------
+# System Monitoring
+#----------------------
+psutil>=5.9.0          # System and process monitoring
+psycopg2-binary==2.9.10  # PostgreSQL database adapter
+pyod==2.0.5            # Outlier detection library
 
-# Configuration and utilities
-PyYAML>=6.0
-# python-multipart>=0.0.6  # REMOVED (FastAPI dependency)
+#------------------------
+# Development & Testing
+#------------------------
+pytest>=7.4.0          # Testing framework
+pytest-asyncio>=0.21.0 # Async testing support
 
-# Development and testing
-pytest>=7.4.0
-pytest-asyncio>=0.21.0
-# httpx>=0.25.0  # REMOVED (not used in codebase)
+#---------------------------
+# Configuration & Utilities
+#---------------------------
+PyYAML>=6.0            # YAML file parsing
+ray[serve]==2.48.0     # Scalable model serving framework
 
-# Optional: For enhanced logging and monitoring
-prometheus-client>=0.19.0
-structlog>=23.2.0
-
-
-black==24.1.1
-flake8==7.0.0
-mypy==1.8.0
-isort==5.13.2
-types-PyYAML==6.0.12.12
-pre-commit==3.6.0
-pylint==3.3.7
-types-requests
-
-
-psycopg2-binary
+#--------------------------------
+# Audit & Storage
+#--------------------------------
+redis==6.4.0             # In-memory data store
+scikit-learn>=1.3.0    # Machine learning toolkit
+structlog>=23.2.0        # Structured logging
+torch==2.8.0           # Deep learning framework
+uvicorn==0.35.0        # ASGI web server implementation
