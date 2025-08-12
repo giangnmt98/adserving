@@ -19,22 +19,21 @@ ray:
   dashboard_host: "0.0.0.0"
   dashboard_port: 8265
 
-serve:
-  # Cấu hình HTTP của Ray Serve (cổng và host cho endpoint HTTP của Serve)
-  http:
-    # Env override: SERVE_HTTP_HOST
-    host: "0.0.0.0"
-    # Env override: SERVE_HTTP_PORT
-    port: 8001
+# Cấu hình HTTP của Ray Serve (cổng và host cho endpoint HTTP của Serve)
+http:
+  # Env override: SERVE_HTTP_HOST
+  host: "0.0.0.0"
+  # Env override: SERVE_HTTP_PORT
+  port: 8001
 
-  autoscaling:
-    min_replicas: 2
-    max_replicas: 8
-    target_num_ongoing_requests_per_replica: 12
+autoscaling:
+  min_replicas: 4
+  max_replicas: 8
+  target_num_ongoing_requests_per_replica: 50
 
-  deployment:
-    num_cpus: 1
-    memory_mb: 2048
+server_deployment:
+  num_cpus: 3
+  memory_mb: 2048
 
 preload:
   # Giới hạn số model load song song khi khởi động
@@ -62,10 +61,11 @@ security:
 # YAML
 audit:
   enabled: true
-  sampling:
-    training_rate: 0.2
-    inference_rate: 1.0
+  training_rate: 1.0
+  inference_rate: 1.0
   redact_pii: true
+  training_database_table: "training_data"
+  inference_database_table: "infer_result"
 
 redis:
   host: "127.0.0.1"
@@ -84,7 +84,7 @@ redis:
     group_name: "adserving_consumers"
     training_consumer_prefix: "trainw"
     inference_consumer_prefix: "inferw"
-    batch_size: 200
+    batch_size: 2000
     block_time_ms: 100
     max_retries: 5
     idle_timeout_ms: 30000
@@ -92,12 +92,11 @@ redis:
 database:
   host: "127.0.0.1"
   port: 5432
-  name: "postgres"
-  user: "admin"
+  database_name: "anomaly_detection"
+  username: "admin"
   password: "admin"
   min_connections: 5
   max_connections: 20
-  command_timeout: 60
 
 ray_workers:
   training_workers: 2

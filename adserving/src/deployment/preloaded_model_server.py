@@ -1,4 +1,5 @@
-# Python
+"""Preloaded model server for ML model serving with zero-downtime updates."""
+
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,18 +14,15 @@ from adserving.src.mlflow_handler.mlflow_client import (
 from adserving.src.mlflow_handler.mlflow_parameter_updater import MLflowParameterUpdater
 from adserving.src.utils.logger import get_logger
 
-
-def _build_model_uri(name: str, version: str | int) -> str:
-    return f"models:/{name}/{version}"
-
-
-def _parse_model_name(model_name: str) -> Tuple[str, str]:
-    parts = model_name.split("_")
-    if len(parts) < 4:
-        return "", ""
-    fld_code = parts[-1]
-    ma_tieu_chi = "_".join(parts[2:-1]) if len(parts) > 3 else ""
-    return ma_tieu_chi, fld_code
+from .utils import (
+    _build_model_uri,
+    _parse_model_name,
+    build_exception_response,
+    build_success_response,
+    build_unknown_model_response,
+    decide_anomaly,
+    validate_task_element,
+)
 
 
 @serve.deployment(
@@ -37,7 +35,14 @@ def _parse_model_name(model_name: str) -> Tuple[str, str]:
     },
 )
 class PreloadedModelServer:
-    """ """
+    """Server lưu trữ và phục vụ các ML model đã preload để sử dụng.
+
+    Hỗ trợ:
+    - Tự động preload các model Production từ MLflow khi khởi động
+    - Giám sát và cập nhật model version mới
+    - Phục vụ dự đoán trên nhiều model song song
+    - Zero-downtime khi cập nhật model mới
+    """
 
     def __init__(
         self,
@@ -112,7 +117,7 @@ class PreloadedModelServer:
 
         return names or []
 
-    def _list_production(self) -> Dict[str, str]:
+    def _list_production(self):
         try:
             return self._client.get_production_models_with_versions()
         except Exception as e:
@@ -168,7 +173,6 @@ class PreloadedModelServer:
             futures = {}
             for name, ver in prod_map.items():
                 futures[ex.submit(self._load_model_version, name, ver)] = (name, ver)
-
             ok = 0
             for fut in as_completed(futures):
                 name, ver = futures[fut]
@@ -260,18 +264,13 @@ class PreloadedModelServer:
         ma_tieu_chi, fld_code = _parse_model_name(model_name)
 
         if model is None:
-            return {
-                "model_name": model_name,
-                "ma_tieu_chi": ma_tieu_chi,
-                "fld_code": fld_code,
-                "is_anomaly": False,
-                "anomaly_score": None,
-                "anomaly_threshold": self._threshold_of(model_name),
-                "processing_time": 0.0,
-                "model_version": self.model_versions.get(model_name),
-                "error_message": f"Unknown model: {model_name}",
-                "status": "error",
-            }
+            return build_unknown_model_response(
+                model_name=model_name,
+                ma_tieu_chi=ma_tieu_chi,
+                fld_code=fld_code,
+                threshold=self._threshold_of(model_name),
+                model_version=self.model_versions.get(model_name),
+            )
 
         t0 = time.time()
         try:
@@ -279,40 +278,32 @@ class PreloadedModelServer:
             dt = time.time() - t0
         except Exception as e:
             dt = time.time() - t0
-            return {
-                "model_name": model_name,
-                "ma_tieu_chi": ma_tieu_chi,
-                "fld_code": fld_code,
-                "is_anomaly": False,
-                "anomaly_score": None,
-                "anomaly_threshold": self._threshold_of(model_name),
-                "processing_time": dt,
-                "model_version": self.model_versions.get(model_name),
-                "error_message": str(e),
-                "status": "error",
-            }
-
-        threshold = self._threshold_of(model_name)
-        is_anomaly = False
-        if threshold is not None:
-            is_anomaly = bool(
-                score < threshold if threshold <= 0 else score > threshold
+            return build_exception_response(
+                model_name=model_name,
+                ma_tieu_chi=ma_tieu_chi,
+                fld_code=fld_code,
+                threshold=self._threshold_of(model_name),
+                processing_time=dt,
+                model_version=self.model_versions.get(model_name),
+                error_message=str(e),
             )
 
-        return {
-            "model_name": model_name,
-            "ma_tieu_chi": ma_tieu_chi,
-            "fld_code": fld_code,
-            "is_anomaly": is_anomaly,
-            "anomaly_score": score,
-            "anomaly_threshold": threshold,
-            "processing_time": dt,
-            "model_version": self.model_versions.get(model_name),
-            "error_message": None,
-            "status": "success",
-        }
+        threshold = self._threshold_of(model_name)
+        is_anomaly = decide_anomaly(score, threshold)
+
+        return build_success_response(
+            model_name=model_name,
+            ma_tieu_chi=ma_tieu_chi,
+            fld_code=fld_code,
+            is_anomaly=is_anomaly,
+            score=score,
+            threshold=threshold,
+            processing_time=dt,
+            model_version=self.model_versions.get(model_name),
+        )
 
     async def predict_multi(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Predict multiple tasks in parallel."""
         if not self.is_ready:
             raise RuntimeError("Server not ready.")
         loop = asyncio.get_running_loop()
@@ -335,6 +326,7 @@ class PreloadedModelServer:
         return [o[1] for o in outs]
 
     async def validate_and_predict(self, tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Validate and predict multiple tasks in parallel."""
         if not self.is_ready:
             raise RuntimeError("Server not ready.")
 
@@ -342,36 +334,11 @@ class PreloadedModelServer:
         failed: List[Dict[str, Any]] = []
 
         for i, t in enumerate(tasks):
-            try:
-                m = str(t["model_name"])
-                v = float(t["value"])
-            except Exception:
-                failed.append(
-                    {
-                        "element_index": i,
-                        "model_name": t.get("model_name"),
-                        "ma_tieu_chi": "",
-                        "fld_code": "",
-                        "error": "invalid_task",
-                        "error_details": "Thiếu hoặc sai định dạng model_name / value",
-                    }
-                )
-                continue
-
-            if m not in self.models_active:
-                mtc, fld = _parse_model_name(m)
-                failed.append(
-                    {
-                        "element_index": i,
-                        "model_name": m,
-                        "ma_tieu_chi": mtc,
-                        "fld_code": fld,
-                        "error": "model_not_found",
-                        "error_details": "Model không tồn tại trong preload.",
-                    }
-                )
-                continue
-            valid.append((i, m, v))
+            valid_item, failed_item = validate_task_element(t, i, self.models_active)
+            if failed_item is not None:
+                failed.append(failed_item)
+            elif valid_item is not None:
+                valid.append(valid_item)
 
         if not valid:
             return {"results": [], "failed_elements": failed}
@@ -392,12 +359,15 @@ class PreloadedModelServer:
         results = [o[1] for o in outs]
         return {"results": results, "failed_elements": failed}
 
-    # Convenience admin APIs
-    def get_model_details(self, model_name: str) -> Dict[str, Any]:
-        loaded = model_name in self.models_active
-        return {
-            "model_name": model_name,
-            "loaded": loaded,
-            "model_version": self.model_versions.get(model_name),
-            "anomaly_threshold": self.thresholds.get(model_name),
-        }
+    #
+    # # Convenience admin APIs
+    # def get_model_details(self, model_name: str) -> Dict[str, Any]:
+    #     loaded = model_name in self.models_active
+    #     """Get model details, including loaded status,
+    #     model version, and anomaly threshold."""
+    #     return {
+    #         "model_name": model_name,
+    #         "loaded": loaded,
+    #         "model_version": self.model_versions.get(model_name),
+    #         "anomaly_threshold": self.thresholds.get(model_name),
+    #     }

@@ -1,4 +1,3 @@
-# Python
 """
 Request processing utilities for pooled model deployments
 """
@@ -6,7 +5,6 @@ Request processing utilities for pooled model deployments
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
 from fastapi import HTTPException
 
 from adserving.src.utils.logger import FrameworkLogger, get_logger
@@ -17,34 +15,6 @@ class RequestProcessor:
 
     def __init__(self, logger: Optional[FrameworkLogger] = None):
         self.logger = logger or get_logger()
-
-    def extract_model_names(self, request: Dict[str, Any]) -> List[str]:
-        model_names = []
-        if all(key in request for key in ["ma_don_vi", "ma_bao_cao", "data"]):
-            ma_don_vi = request["ma_don_vi"]
-            ma_bao_cao = request["ma_bao_cao"]
-
-            if isinstance(request["data"], list):
-                for data_item in request["data"]:
-                    if "ma_tieu_chi" in data_item:
-                        ma_tieu_chi = data_item["ma_tieu_chi"]
-                        fn_fields = {
-                            k: v
-                            for k, v in data_item.items()
-                            if k.startswith("FN") and k != "ma_tieu_chi"
-                        }
-                        for fld_code in fn_fields:
-                            normalized_fld = self._normalize_field_code(fld_code)
-                            model_name = (
-                                f"{ma_don_vi}_{ma_bao_cao}"
-                                f"_{ma_tieu_chi}_{normalized_fld}"
-                            )
-                            model_names.append(model_name)
-
-        if not model_names and "model_name" in request:
-            model_names.append(request["model_name"])
-
-        return model_names
 
     def _normalize_field_code(self, field_name: str) -> str:
         if not field_name.upper().startswith("FN"):
@@ -75,6 +45,7 @@ class RequestProcessor:
         return prediction_tasks
 
     def _validate_request(self, request: Dict[str, Any]) -> None:
+        """Validate request. Raise HTTPException(400) if invalid."""
         if not request:
             self.logger.error("Empty request received")
             raise HTTPException(
@@ -111,6 +82,8 @@ class RequestProcessor:
             )
 
     def _extract_request_fields(self, request: Dict[str, Any]) -> tuple:
+        """Extract required fields from request.
+        Raise HTTPException(400) if invalid."""
         ma_don_vi = request["ma_don_vi"]
         ma_bao_cao = request["ma_bao_cao"]
         ky_du_lieu = request["ky_du_lieu"]
@@ -219,6 +192,7 @@ class RequestProcessor:
             )
 
     def _validate_data_list(self, data_list: Any) -> None:
+        """Validate data list"""
         if not isinstance(data_list, list):
             self.logger.error(
                 f"Invalid data format: expected list, got {type(data_list)}"
@@ -257,6 +231,7 @@ class RequestProcessor:
     def _create_prediction_tasks(
         self, data_list: List, ma_don_vi: str, ma_bao_cao: str, ky_du_lieu: str
     ) -> List[Dict[str, Any]]:
+        """Create prediction tasks from data list"""
         prediction_tasks: List[Dict[str, Any]] = []
         for i, data_item in enumerate(data_list):
             self._validate_data_item(data_item, i)
@@ -265,7 +240,7 @@ class RequestProcessor:
 
             for fn_field, gia_tri in fn_fields.items():
                 if gia_tri is None:
-                    self.logger.warning(
+                    self.logger.debug(
                         f"Skipping {fn_field} with None value in data item at index {i}"
                     )
                     continue
@@ -383,4 +358,4 @@ class RequestProcessor:
             fn_field: gia_tri,
             "gia_tri": gia_tri,
         }
-        return {"model_name": model_name, "input_data": pd.DataFrame([input_features])}
+        return {"model_name": model_name, "input_data": input_features}

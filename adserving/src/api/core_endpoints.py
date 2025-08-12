@@ -27,7 +27,7 @@ async def service_info():
     """Get service information and status"""
     try:
         uptime = datetime.now() - service_start_time
-        uptime_str = str(uptime).split(".")[0]  # Remove microseconds
+        uptime_str = str(uptime).split(".", maxsplit=1)[0]  # Remove microseconds
 
         return ServiceInfoResponse(
             service="Anomaly Detection API",
@@ -91,7 +91,7 @@ async def health_check():
     try:
         cfg = get_config()
         uptime = datetime.now() - service_start_time
-        uptime_str = str(uptime).split(".")[0]
+        uptime_str = str(uptime).split(".", maxsplit=1)[0]
 
         # 1) Mặc định các thống kê rỗng/an toàn
         deployment_stats: Dict[str, Any] = {}

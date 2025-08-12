@@ -1,3 +1,15 @@
+"""
+This module provides API endpoints for managing
+ML model serving functionality including:
+- Model information and status retrieval
+- Model parameter management (get/update/validate/rollback)
+- Model caching and warm-up operations
+- Production model listing
+
+The endpoints interact with MLflow for model management
+and Ray Serve for model serving.
+"""
+
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -18,6 +30,7 @@ router = APIRouter()
 
 
 def _get_serve_handle():
+    """Get handle to the Ray Serve application"""
     try:
         return serve.get_app_handle("preloaded_model_server")
     except Exception as e:
@@ -25,13 +38,18 @@ def _get_serve_handle():
 
 
 def _get_param_updater() -> MLflowParameterUpdater:
-    # Tạo updater với client MLflow từ config (đúng kiểu đối số)
+    """Create MLflow parameter updater instance from config
+
+    Returns:
+        MLflowParameterUpdater: Updater instance for managing model parameters
+
+    Raises:
+        HTTPException: If updater creation fails
+    """
     try:
         cfg = get_config()
-        client = WrappedMLflowClient(
-            tracking_uri=cfg.mlflow.tracking_uri
-        )  # TẠO CLIENT ĐÚNG
-        return MLflowParameterUpdater(client)  # TRUYỀN CLIENT, KHÔNG TRUYỀN cfg.mlflow
+        client = WrappedMLflowClient(tracking_uri=cfg.mlflow.tracking_uri)
+        return MLflowParameterUpdater(client)
     except Exception as e:
         logger.error(f"Cannot create MLflowParameterUpdater: {e}")
         raise HTTPException(
@@ -41,27 +59,37 @@ def _get_param_updater() -> MLflowParameterUpdater:
 
 # Request/Response models for parameter management
 class ParameterUpdateRequest(BaseModel):
+    """Request model for updating model parameters"""
+
     parameters: Dict[str, float]
     comment: Optional[str] = None
 
 
 class AnomalyThresholdUpdateRequest(BaseModel):
+    """Request model for updating anomaly threshold"""
+
     threshold: float
     comment: Optional[str] = None
 
 
 class RollbackRequest(BaseModel):
+    """Request model for rolling back model version"""
+
     model_name: str
     target_version: str
 
 
 class ParameterValidationResponse(BaseModel):
+    """Response model for parameter validation"""
+
     valid: bool
     errors: List[str] = []
     warnings: List[str] = []
 
 
 class ParameterHistoryResponse(BaseModel):
+    """Response model for parameter update history"""
+
     model_name: str
     updates: List[Dict]
     total_count: int

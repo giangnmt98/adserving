@@ -1,4 +1,5 @@
-# Python
+"""Prediction endpoint for anomaly detection API."""
+
 import math
 import time
 import uuid
@@ -8,19 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException
 from ray import serve
 
-# NOTE: Import trực tiếp từ api_dependencies để tránh trùng module dẫn tới _ASYNC_RUNNER bị None
 from adserving.src.api.api_dependencies import get_input_handler
+from adserving.src.audit.integration import on_inference_done, on_request_parsed
 from adserving.src.datahandler.data_handler import DataHandler
 from adserving.src.datahandler.models import APIResponse, PredictionRequest
 from adserving.src.deployment.request_processor import RequestProcessor
 from adserving.src.utils.logger import get_logger
-
-# [NEW] Tích hợp audit emit (training/inference)
-from adserving.src.audit.integration import (
-    build_training_features,
-    on_inference_done,
-    on_request_parsed,
-)
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic.type_adapter")
 
@@ -30,12 +24,8 @@ router = APIRouter()
 _HANDLE: Optional[Any] = None
 
 
-async def _persist_details_to_db(details: List[Dict[str, Any]]) -> None:
-    # TODO: triển khai lưu nền vào DB / queue
-    pass
-
-
 def _float_or_error(v: Any) -> Tuple[bool, Optional[float], str]:
+    """Convert value to float with error handling."""
     try:
         fv = float(v)
         if math.isnan(fv):
@@ -46,6 +36,7 @@ def _float_or_error(v: Any) -> Tuple[bool, Optional[float], str]:
 
 
 def _get_handle() -> Any:
+    """Get or create global handle to preloaded model server."""
     global _HANDLE
     if _HANDLE is None:
         _HANDLE = serve.get_app_handle("preloaded_model_server")
@@ -72,81 +63,68 @@ async def predict(
     request: PredictionRequest,
     handler: DataHandler = Depends(get_input_handler),
 ):
+    """Process prediction request and return anomaly detection results.
+
+    Args:
+        request (PredictionRequest): The prediction request containing input data
+        handler (DataHandler, optional): Data handler for request processing.
+            Defaults to Depends(get_input_handler).
+
+    Returns:
+        APIResponse: Response containing:
+            - request_id: Unique identifier for the request
+            - timestamp: Request timestamp
+            - total_time: Total processing time
+            - status: Overall status (success/partial_success/error)
+            - anomalies: List of detected anomalies
+            - failed: List of failed predictions
+            - validation_errors: List of input validation errors
+
+    Raises:
+        HTTPException: If request processing fails with status codes:
+            - 400: Invalid request data
+            - 500: Internal server error
+    """
+
     req_id = str(uuid.uuid4())
+    timestamp = str(time.time() * 1000)
     start = time.time()
 
     try:
-        # 1) Parse input gốc
+        # Parse input gốc
         raw_req = await _extract_raw_request(request)
 
-        # 2) Chuẩn hóa/validate bằng DataHandler
+        # Chuẩn hóa/validate bằng DataHandler
         processed = await handler.process_request(request)
 
-        # [NEW] 2.1) Emit training record (best-effort, không chặn)
-        # - Xây dựng features rút gọn phục vụ training
-        features = build_training_features(raw_req)
-        # - Nếu hệ thống có cơ chế consent, truyền vào đây; hiện mặc định {}
-        consent_flags: Dict[str, Any] = {}
-        on_request_parsed(
-            request_id=req_id,
-            req_body=raw_req,
-            features=features,
-            consent=consent_flags,
-        )
-
-        # 3) Chuẩn bị task infer
+        # Chuẩn bị task infer
         prediction_tasks = await _prepare_prediction_tasks(raw_req)
-        tasks, failed_local = await _build_float_tasks(prediction_tasks)
 
-        # 4) Gọi remote model phục vụ dự đoán
+        # Emit training record
+        on_request_parsed(
+            data=prediction_tasks,
+        )
+        tasks, failed_local = await _build_tasks(prediction_tasks)
+
+        # Gọi remote model phục vụ dự đoán
         details, failed_remote = await _get_prediction_results(tasks)
 
-        # 5) Tổng hợp lỗi + anomalies
+        # Tổng hợp lỗi + anomalies
         failed = _process_failures(failed_local, failed_remote)
         anomalies = _process_anomalies(details)
 
         total_time = time.time() - start
         status = _determine_status(details, failed)
 
-        # [NEW] 5.1) Emit inference results (best-effort, không chặn)
-        # - Với các item thành công trong details: emit trạng thái success
-        for item in details:
-            print(item)
-            try:
-                # item kỳ vọng gồm: model_name, ma_tieu_chi, fld_code, is_anomaly, anomaly_score,
-                # anomaly_threshold, processing_time, model_version, status, error_message
-                on_inference_done(
-                    request_id=req_id,
-                    result=item,
-                    total_time=float(item.get("processing_time") or total_time),
-                )
-            except Exception as e:
-               logger.error(f"Failed to emit inference result: {e}")
-
-        # - Với các phần tử lỗi: emit trạng thái error (tối thiểu)
-        for f in failed_local + failed_remote:
-            try:
-                mtc = f.get("ma_tieu_chi")
-                fld = f.get("fld_code")
-                err = f.get("error_details") or f.get("error_message") or f.get("error") or "prediction_failed"
-                on_inference_done(
-                    request_id=req_id,
-                    result={
-                        "model_name": f.get("model_name", "unknown"),
-                        "ma_tieu_chi": mtc,
-                        "fld_code": fld,
-                        "is_anomaly": False,
-                        "anomaly_score": None,
-                        "anomaly_threshold": None,
-                        "processing_time": total_time,
-                        "model_version": None,
-                        "status": "error",
-                        "error_message": err,
-                    },
-                    total_time=total_time,
-                )
-            except Exception:
-                pass
+        # Emit inference results (best-effort, không chặn)
+        try:
+            on_inference_done(
+                request_id=req_id,
+                timestamp=timestamp,
+                details_result=details,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to emit inference result: {e}")
 
         response_payload = {
             "status": status,
@@ -156,6 +134,7 @@ async def predict(
 
         return await handler.format_response(
             request_id=req_id,
+            timestamp=timestamp,
             total_time=total_time,
             ma_don_vi=raw_req.get("ma_don_vi"),
             ma_bao_cao=raw_req.get("ma_bao_cao"),
@@ -171,10 +150,12 @@ async def predict(
 
 
 async def _extract_raw_request(request: PredictionRequest) -> Dict[str, Any]:
+    """Extract raw request data from PredictionRequest object."""
     return request.model_dump() if hasattr(request, "model_dump") else dict(request)
 
 
 async def _prepare_prediction_tasks(raw_req: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Prepare prediction tasks from raw request data."""
     rp = RequestProcessor()
     try:
         return rp.prepare_input_data(raw_req)
@@ -184,17 +165,18 @@ async def _prepare_prediction_tasks(raw_req: Dict[str, Any]) -> List[Dict[str, A
         raise HTTPException(status_code=400, detail=str(e))
 
 
-async def _build_float_tasks(
+async def _build_tasks(
     prediction_tasks: List[Dict[str, Any]]
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Build prediction tasks from input data, separating valid and failed tasks."""
     tasks = []
     failed_local = []
 
     for idx, t in enumerate(prediction_tasks):
         m = t.get("model_name")
-        df = t.get("input_data")
+        input_data = t.get("input_data")
 
-        if m is None or df is None:
+        if m is None or input_data is None:
             mtc, fld = _parse_model_name(m)
             failed_local.append(
                 {
@@ -209,7 +191,7 @@ async def _build_float_tasks(
             continue
 
         try:
-            val = df["gia_tri"].iloc[0]
+            val = input_data.get("gia_tri")
         except Exception:
             mtc, fld = _parse_model_name(m)
             failed_local.append(
@@ -224,22 +206,7 @@ async def _build_float_tasks(
             )
             continue
 
-        ok_val, fv, msg = _float_or_error(val)
-        if not ok_val or fv is None:
-            mtc, fld = _parse_model_name(m)
-            failed_local.append(
-                {
-                    "element_index": idx,
-                    "model_name": m,
-                    "ma_tieu_chi": mtc,
-                    "fld_code": fld,
-                    "error": "invalid_value",
-                    "error_details": msg,
-                }
-            )
-            continue
-
-        tasks.append({"model_name": str(m), "value": float(fv)})
+        tasks.append({"model_name": str(m), "value": float(val)})
 
     return tasks, failed_local
 
@@ -247,6 +214,7 @@ async def _build_float_tasks(
 async def _get_prediction_results(
     tasks: List[Dict[str, Any]]
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Get prediction results from remote model server."""
     handle = _get_handle()
     result_obj = await handle.validate_and_predict.remote(tasks)
     details = (result_obj or {}).get("results", [])
@@ -257,6 +225,7 @@ async def _get_prediction_results(
 def _process_failures(
     failed_local: List[Dict[str, Any]], failed_remote: List[Dict[str, Any]]
 ) -> List[Dict[str, str]]:
+    """Process and standardize failure information from local and remote sources."""
     failed_all_raw = failed_local + failed_remote
     failed = []
 
@@ -281,6 +250,7 @@ def _process_failures(
 
 
 def _process_anomalies(details: List[Dict[str, Any]]):
+    """Process and group anomalies by ma_tieu_chi from prediction details."""
     grouped_anomalies: Dict[str, set] = {}
     for item in details:
         if (
@@ -306,6 +276,7 @@ def _process_anomalies(details: List[Dict[str, Any]]):
 def _determine_status(
     details: List[Dict[str, Any]], failed: List[Dict[str, str]]
 ) -> str:
+    """Determine overall status based on prediction details and failures."""
     if details and not failed:
         return "success"
     elif details:

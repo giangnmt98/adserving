@@ -1,4 +1,7 @@
-# Python
+"""Exception handlers module for standardizing error responses across the application.
+"""
+
+import json
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -12,14 +15,6 @@ from adserving.src.utils.logger import get_logger
 logger = get_logger()
 
 
-def _now_iso() -> str:
-    return datetime.now().isoformat()
-
-
-def _ensure_request_id(request_id: Optional[str]) -> str:
-    return request_id or f"req_{int(datetime.now().timestamp() * 1000)}"
-
-
 def _unified_error_payload(
     *,
     error_code: str,
@@ -30,7 +25,6 @@ def _unified_error_payload(
     status_code: int = 400,
 ) -> JSONResponse:
     """Trả về payload lỗi theo format duy nhất."""
-    rid = _ensure_request_id(request_id)
     payload = {
         "error": {
             "error_code": error_code,
@@ -38,14 +32,22 @@ def _unified_error_payload(
             "error_details": error_details or "Input validation failed",
         },
         "field_path": field_path or "unknown",
-        "request_id": rid,
+        "request_id": request_id,
         "status": "error",
-        "timestamp": _now_iso(),
+        "timestamp": datetime.now().isoformat(),
     }
     return JSONResponse(status_code=status_code, content=payload)
 
 
 def _pydantic_error_code(err_type: str) -> str:
+    """Map Pydantic error types to standardized error codes.
+
+    Args:
+        err_type: Pydantic error type string
+
+    Returns:
+        str: Mapped error code
+    """
     # Map cơ bản cho Pydantic error types
     if err_type == "missing":
         return "MISSING_REQUIRED_FIELD"
@@ -61,6 +63,14 @@ def _pydantic_error_code(err_type: str) -> str:
 
 
 def _format_field_path_from_loc(loc: List[Any]) -> str:
+    """Format Pydantic location into dot-notation field path.
+
+    Args:
+        loc: List of location components from Pydantic error
+
+    Returns:
+        str: Formatted field path (e.g. "data[0].field_name")
+    """
     # loc có dạng ("body","data", 0, "ma_tieu_chi") → "data[0].ma_tieu_chi"
     if not loc:
         return "unknown"
@@ -92,8 +102,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         if request.method == "POST":
             body = await request.body()
             if body:
-                import json
-
                 data = json.loads(body)
                 request_id = data.get("request_id")
     except Exception:
@@ -129,7 +137,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         last_segment = str(field_path.split(".")[-1]) if field_path else ""
         # nếu có dạng data[<i>].<field>
         if field_path.startswith("data[") and "." in field_path:
-            idx_part, field_part = field_path.split(".", 1)
+            idx_part, _ = field_path.split(".", 1)
             try:
                 idx = int(idx_part[idx_part.find("[") + 1 : idx_part.find("]")])
             except Exception:
@@ -156,7 +164,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+async def http_exception_handler(exc: StarletteHTTPException):
     """Chuẩn hóa mọi HTTPException về format duy nhất."""
     # Nếu detail đã theo format mục tiêu thì passthrough
     if (
@@ -223,7 +231,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     )
 
 
-async def general_exception_handler(request: Request, exc: Exception):
+async def general_exception_handler(exc: Exception):
     """Fallback thống nhất cho lỗi không bắt được."""
     logger.error(f"Unexpected error: {exc}")
     return _unified_error_payload(

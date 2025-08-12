@@ -1,13 +1,21 @@
-# Python
+"""Audit system runner for starting Ray
+workers to process training and inference streams."""
+
 import ray
-from adserving.src.config.config import get_config
+
 from adserving.src.audit.worker import StreamConsumer
+from adserving.src.config.config import get_config
 from adserving.src.utils.logger import get_logger
 
 logger = get_logger()
 
 
 def start_audit_workers() -> None:
+    """Start Ray actors to consume training and inference data streams.
+    Returns:
+        None
+    """
+
     cfg = get_config()
     raw = getattr(cfg, "raw", {}) if hasattr(cfg, "raw") else {}
 
@@ -50,5 +58,6 @@ def start_audit_workers() -> None:
         a.run_forever.remote()
 
     logger.info(
-        f"Audit workers started: training={tw} on {training_stream}, inference={iw} on {inference_stream}, group={group}"
+        f"Audit workers started: training={tw} on "
+        f"{training_stream}, inference={iw} on {inference_stream}, group={group}"
     )

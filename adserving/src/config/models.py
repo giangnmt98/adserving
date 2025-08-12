@@ -173,8 +173,11 @@ class SecurityConfig:
     enable_audit_logging: bool = True
     session_timeout: int = 3600  # 1 hour
 
+
 @dataclass
 class RedisStreamsConfig:
+    """Redis Streams configuration for training data and inference results."""
+
     training_data: str = "training_data"
     inference_results: str = "inference_results"
     dlq: Optional[str] = "audit_dlq"
@@ -183,6 +186,8 @@ class RedisStreamsConfig:
 
 @dataclass
 class RedisConsumerConfig:
+    """Redis consumer group configuration for processing streams."""
+
     group_name: str = "adserving_consumers"
     training_consumer_prefix: str = "trainw"
     inference_consumer_prefix: str = "inferw"
@@ -194,6 +199,8 @@ class RedisConsumerConfig:
 
 @dataclass
 class RedisConfig:
+    """Redis connection and configuration settings."""
+
     host: str = "127.0.0.1"
     port: int = 6379
     db: int = 0
@@ -209,23 +216,25 @@ class RedisConfig:
 
 @dataclass
 class DatabaseConfig:
+    """Database configuration class"""
+
     host: str = "127.0.0.1"
     port: int = 5432
-    name: str = "postgres"
-    user: str = "postgres"
-    password: Optional[str] = None
+    database_name: str = "default"
+    username: str = "postgres"
+    password: str = ""
     min_connections: int = 5
-    max_connections: int = 20
-    command_timeout: int = 60
-
-@dataclass
-class AuditSamplingConfig:
-    training_rate: float = 0.2
-    inference_rate: float = 1.0
+    max_connections: int = 200
 
 
 @dataclass
 class AuditConfig:
+    """Audit logging configuration."""
+
     enabled: bool = True
-    sampling: AuditSamplingConfig = AuditSamplingConfig()
     redact_pii: bool = True
+    events_database_table: str = "events"
+    training_database_table: str = "training_data"
+    inference_database_table: str = "infer_result"
+    training_rate: float = 0.2
+    inference_rate: float = 1.0

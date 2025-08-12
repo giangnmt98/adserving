@@ -1,7 +1,7 @@
-import time
-import warnings
 import random
 import string
+import time
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -9,7 +9,7 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import IsolationForest
+from pyod.models.deep_svdd import DeepSVDD
 from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore")
@@ -22,30 +22,32 @@ mlflow.set_experiment("Anomaly_Detection_Models")
 @dataclass
 class TrainConfig:
     contamination: float = 0.1
-    n_estimators: int = 100
     random_state: int = 42
+    # DeepSVDD-specific
+    epochs: int = 50
+    batch_size: int = 128
+    representation_dim: int = 32
+    pretrained: bool = False
+    lr: float = 1e-3
 
 
 class SimpleAnomalyDetectionModel:
     """
-    Train IsolationForest on univariate values (gia_tri).
+    Train DeepSVDD (PyOD) on univariate values (gia_tri).
     Prediction strictly accepts a single float and returns an anomaly score.
+    Note: In PyOD, higher score => more anomalous.
     """
 
     def __init__(self, cfg: Optional[TrainConfig] = None):
         self.cfg = cfg or TrainConfig()
-        self.model: Optional[IsolationForest] = None
+        self.model: Optional[DeepSVDD] = None
         self.scaler: Optional[StandardScaler] = None
 
     @staticmethod
     def _values_to_2d(values: pd.Series) -> np.ndarray:
-        """Convert a 1D series of numbers to a 2D array [[x1], [x2], ...]."""
         return values.astype(float).to_numpy().reshape(-1, 1)
 
     def _prepare_features(self, data: pd.DataFrame) -> np.ndarray:
-        """
-        Prepare features for training: use only 'gia_tri' as 1D input.
-        """
         if "gia_tri" not in data.columns:
             raise ValueError("Data must contain column 'gia_tri'.")
         values_2d = self._values_to_2d(data["gia_tri"])
@@ -55,14 +57,14 @@ class SimpleAnomalyDetectionModel:
         return self.scaler.transform(values_2d)
 
     def train_and_save_model(
-            self,
-            data: pd.DataFrame,
-            ma_don_vi: str,
-            ma_bao_cao: str,
-            ma_tieu_chi: str,
-            fld_code: str,
-            is_clone: bool = False,
-            original_ma_tieu_chi: Optional[str] = None,
+        self,
+        data: pd.DataFrame,
+        ma_don_vi: str,
+        ma_bao_cao: str,
+        ma_tieu_chi: str,
+        fld_code: str,
+        is_clone: bool = False,
+        original_ma_tieu_chi: Optional[str] = None,
     ) -> bool:
         """
         Train model and register to MLflow. The model expects a single float
@@ -76,7 +78,7 @@ class SimpleAnomalyDetectionModel:
             & (data["ma_bao_cao"] == ma_bao_cao)
             & (data["ma_tieu_chi"] == filter_ma_tieu_chi)
             & (data["fld_code"] == fld_code)
-            ].copy()
+        ].copy()
 
         if len(filtered) < 5:
             print(
@@ -89,26 +91,34 @@ class SimpleAnomalyDetectionModel:
 
         features = self._prepare_features(filtered)
 
-        iso_forest = IsolationForest(
+        deepsvdd = DeepSVDD(
             contamination=self.cfg.contamination,
+            epochs=self.cfg.epochs,
+            batch_size=self.cfg.batch_size,
             random_state=self.cfg.random_state,
-            n_estimators=self.cfg.n_estimators,
+            n_features=features.shape[1],
         )
-        iso_forest.fit(features)
+        deepsvdd.fit(features)
 
-        # Compute optimal anomaly threshold from training scores.
-        # Lower decision scores are more anomalous.
-        train_scores = iso_forest.decision_function(features)
-        # Choose threshold so that approximately 'contamination' fraction are anomalies.
-        anomaly_threshold = float(np.quantile(train_scores, self.cfg.contamination))
+        # Trong PyOD: score cao => bất thường.
+        # Chọn threshold sao cho top 'contamination' là anomalous.
+        train_scores = deepsvdd.decision_function(features)
+        anomaly_threshold = float(
+            np.quantile(train_scores, 1.0 - self.cfg.contamination)
+        )
 
         class FloatInputAnomalyWrapper:
             """
             Wrapper exposes predict(x: float) -> float anomaly score.
-            Negative score indicates more anomalous.
+            Higher score indicates more anomalous (PyOD convention).
             """
 
-            def __init__(self, model: IsolationForest, scaler: StandardScaler, threshold: float):
+            def __init__(
+                self,
+                model: DeepSVDD,
+                scaler: StandardScaler,
+                threshold: float,
+            ):
                 self.model = model
                 self.scaler = scaler
                 self.anomaly_threshold = float(threshold)
@@ -118,8 +128,8 @@ class SimpleAnomalyDetectionModel:
                     raise TypeError("Input must be a single float.")
                 arr = np.array([[float(x)]])
                 arr_scaled = self.scaler.transform(arr)
-                score = self.model.decision_function(arr_scaled)[0]
-                return float(score)
+                score = float(self.model.decision_function(arr_scaled)[0])
+                return score
 
             def predict_label(self, x: float, threshold: float | None = None) -> int:
                 """
@@ -128,9 +138,11 @@ class SimpleAnomalyDetectionModel:
                 """
                 score = self.predict(x)
                 thr = self.anomaly_threshold if threshold is None else float(threshold)
-                return -1 if score < thr else 1
+                return -1 if score > thr else 1
 
-        wrapped_model = FloatInputAnomalyWrapper(iso_forest, self.scaler, anomaly_threshold)
+        wrapped_model = FloatInputAnomalyWrapper(
+            deepsvdd, self.scaler, anomaly_threshold
+        )
 
         run_name = f"clone_{model_name}" if is_clone else f"train_{model_name}"
         with mlflow.start_run(run_name=run_name):
@@ -140,15 +152,25 @@ class SimpleAnomalyDetectionModel:
             mlflow.log_param("ma_tieu_chi", ma_tieu_chi)
             mlflow.log_param("fld_code", fld_code)
             mlflow.log_param("input_type", "float")
-            mlflow.log_param("algorithm", "isolation_forest")
+            mlflow.log_param("algorithm", "DeepSVDD_PyOD")
+
+            # Log threshold và phương pháp tính
             mlflow.log_param("anomaly_threshold", anomaly_threshold)
-            mlflow.log_param("threshold_method", "quantile_by_contamination")
+            mlflow.log_param("threshold_method", "quantile_(1-contamination)_on_scores")
+
+            # Hyperparams
             mlflow.log_param("contamination", self.cfg.contamination)
-            mlflow.log_param("n_estimators", self.cfg.n_estimators)
+            mlflow.log_param("epochs", self.cfg.epochs)
+            mlflow.log_param("batch_size", self.cfg.batch_size)
+            mlflow.log_param("representation_dim", self.cfg.representation_dim)
+            mlflow.log_param("pretrained", self.cfg.pretrained)
+            mlflow.log_param("lr", self.cfg.lr)
             mlflow.log_param("random_state", self.cfg.random_state)
+
+            # Thống kê score train để debug
             mlflow.log_param("train_score_p50", float(np.median(train_scores)))
-            mlflow.log_param("train_score_p10", float(np.quantile(train_scores, 0.10)))
             mlflow.log_param("train_score_p90", float(np.quantile(train_scores, 0.90)))
+            mlflow.log_param("train_score_p10", float(np.quantile(train_scores, 0.10)))
 
             if is_clone:
                 mlflow.log_param("is_clone", True)
@@ -162,7 +184,7 @@ class SimpleAnomalyDetectionModel:
             mlflow.log_param("data_date_range", date_range)
 
             model_metadata = {
-                "algorithm": "isolation_forest",
+                "algorithm": "DeepSVDD_PyOD",
                 "input_type": "float",
                 "training_samples": int(len(filtered)),
                 "feature_count": 1,
@@ -172,7 +194,7 @@ class SimpleAnomalyDetectionModel:
                 model_metadata["original_ma_tieu_chi"] = original_ma_tieu_chi
 
             mlflow.set_tag("model_type", "anomaly_detection")
-            mlflow.set_tag("algorithm", "isolation_forest")
+            mlflow.set_tag("algorithm", "DeepSVDD_PyOD")
             mlflow.set_tag("version", "2.0")
             mlflow.set_tag("created_by", "SimpleAnomalyDetectionModel")
             if is_clone:
@@ -209,7 +231,8 @@ class SimpleAnomalyDetectionModel:
                     name=model_name, version=new_version, stage="Production"
                 )
                 print(
-                    f"Model {model_name} v{new_version} đã được chuyển sang Production"
+                    f"Model {model_name} v{new_version} đã được chuyển sang "
+                    "Production"
                 )
 
                 if is_clone:
@@ -248,10 +271,10 @@ def clone_single_combination(data: pd.DataFrame, combination_row: pd.Series) -> 
 
 
 def create_clones_for_combination(
-        data: pd.DataFrame,
-        combination_row: pd.Series,
-        num_clones: int,
-        show_individual_progress: bool = True,
+    data: pd.DataFrame,
+    combination_row: pd.Series,
+    num_clones: int,
+    show_individual_progress: bool = True,
 ) -> int:
     detector = SimpleAnomalyDetectionModel()
     successful_count = 0
@@ -290,12 +313,10 @@ def create_clones_for_combination(
 
 
 def clone_multiple_combinations(
-        data: pd.DataFrame, combinations_df: pd.DataFrame
+    data: pd.DataFrame, combinations_df: pd.DataFrame
 ) -> None:
     try:
-        num_per_combo = int(
-            input("Nhập số lượng bản sao cho MỖI combination: ")
-        )
+        num_per_combo = int(input("Nhập số lượng bản sao cho MỖI combination: "))
         if num_per_combo <= 0:
             print("Số lượng phải > 0")
             return
@@ -324,7 +345,7 @@ def clone_multiple_combinations(
                 data, row, num_per_combo, show_individual_progress=False
             )
             successful += ok_count
-            failed += (num_per_combo - ok_count)
+            failed += num_per_combo - ok_count
             total_clones += num_per_combo
             print(f"Hoàn thành: {ok_count}/{num_per_combo} clones thành công")
         except Exception as exc:
@@ -459,13 +480,13 @@ def test_model_loading_and_prediction() -> None:
                 scores = []
                 labels = []
                 for v in test_values:
-                    s = loaded.predict(v)  # float -> score
+                    s = loaded.predict(v)
                     scores.append(s)
-                    # If wrapper has predict_label, use it; otherwise infer by s<0
                     if hasattr(loaded, "predict_label"):
                         labels.append(loaded.predict_label(v))
                     else:
-                        labels.append(-1 if s < 0 else 1)
+                        # Fallback: không biết threshold => coi s>0 là bất thường
+                        labels.append(-1 if float(s) > 0 else 1)
 
                 print("Scores:", [round(float(x), 4) for x in scores])
                 print("Labels:", labels)
@@ -510,7 +531,7 @@ def show_registry_stats() -> None:
 
 def main() -> None:
     while True:
-        print("ANOMALY DETECTION - FLOAT INPUT VERSION")
+        print("ANOMALY DETECTION - FLOAT INPUT VERSION (DeepSVDD)")
         print("1. TRAIN VÀ SAVE TẤT CẢ MODELS")
         print("2. TEST LOAD MODELS VÀ PREDICT FLOAT")
         print("3. THỐNG KÊ MLFLOW REGISTRY")
@@ -526,7 +547,6 @@ def main() -> None:
         elif choice == "3":
             show_registry_stats()
         elif choice == "4":
-            # Load data once here for cloning UI flow
             try:
                 data = pd.read_csv("bao_cao_dulieu_not_none.csv")
                 data["ky_du_lieu"] = pd.to_datetime(data["ky_du_lieu"])
@@ -538,9 +558,7 @@ def main() -> None:
                 continue
 
             combinations = (
-                data.groupby(
-                    ["ma_don_vi", "ma_bao_cao", "ma_tieu_chi", "fld_code"]
-                )
+                data.groupby(["ma_don_vi", "ma_bao_cao", "ma_tieu_chi", "fld_code"])
                 .size()
                 .reset_index(name="count")
             )
@@ -570,11 +588,7 @@ def main() -> None:
                 continue
             elif sub == "1":
                 try:
-                    idx = int(
-                        input(
-                            f"Nhập số thứ tự (1-{len(valid)}): "
-                        )
-                    ) - 1
+                    idx = int(input(f"Nhập số thứ tự (1-{len(valid)}): ")) - 1
                     if 0 <= idx < len(valid):
                         sel = valid.iloc[idx]
                         clone_single_combination(data, sel)
@@ -593,9 +607,7 @@ def main() -> None:
                 except ValueError:
                     print("Vui lòng nhập số")
             elif sub == "3":
-                confirm = input(
-                    "Nhân bản TẤT CẢ combinations? (y/N): "
-                ).strip().lower()
+                confirm = input("Nhân bản TẤT CẢ combinations? (y/N): ").strip().lower()
                 if confirm == "y":
                     clone_multiple_combinations(data, valid)
                 else:

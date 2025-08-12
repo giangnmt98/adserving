@@ -1,3 +1,5 @@
+"""Data models and validation for prediction requests and responses."""
+
 # Python
 from dataclasses import dataclass
 from datetime import datetime
@@ -63,7 +65,7 @@ class PredictionRequest(BaseModel):
 
     @validator("ma_bao_cao")
     def validate_ma_bao_cao(cls, v):
-        """Validate ma_bao_cao - must return error immediately if invalid"""
+        """Validate ma_bao_cao - must return an error immediately if invalid"""
         if not isinstance(v, str):
             err_msg = (
                 "Trường ma_bao_cao phải là kiểu chuỗi (string), nhận được kiểu "
@@ -222,7 +224,7 @@ class Metadata(BaseModel):
     """Metadata section with system information"""
 
     status: str
-    timestamp: str
+    timestamp: float
     request_id: str
     api_version: str
     total_time: float

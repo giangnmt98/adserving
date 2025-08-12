@@ -62,10 +62,7 @@ def build_training_features(
 
 
 def on_request_parsed(
-    request_id: str,
-    req_body: Dict[str, Any],
-    features: Dict[str, Any],
-    consent: Dict[str, Any],
+    data,
 ) -> None:
     """
     Gọi ngay sau khi parse/validate request thành công, để emit training record.
@@ -73,46 +70,32 @@ def on_request_parsed(
     """
     try:
         emit_training_request(
-            request_id=request_id,
-            ma_don_vi=str(req_body.get("ma_don_vi", "")),
-            ma_bao_cao=str(req_body.get("ma_bao_cao", "")),
-            ky_du_lieu=str(req_body.get("ky_du_lieu", "")),
-            features=features,
-            consent_flags=consent or {},
-            user_id_hash=hash_user(req_body.get("user_id")),
+            ma_don_vi=data[0]["input_data"]["ma_don_vi"],
+            ma_bao_cao=data[0]["input_data"]["ma_bao_cao"],
+            ky_du_lieu=data[0]["input_data"]["ky_du_lieu"],
+            data=data,
         )
-    except Exception:
+    except Exception as e:
         # Không để ảnh hưởng luồng chính
-        logger.debug("on_request_parsed emit failed silently.", exc_info=False)
+        logger.error(f"on_request_parsed emit failed: {e}")
 
 
 def on_inference_done(
     request_id: str,
-    result: Dict[str, Any],
-    total_time: float,
+    timestamp,
+    details_result,
 ) -> None:
     """
     Gọi ngay trước khi trả response, sau khi có kết quả inference (hoặc lỗi).
     Gửi bản tóm tắt nhẹ để trace (non-blocking).
-    """
+    #"""
+    data = {
+        "request_id": request_id,
+        "timestamp": timestamp,
+        "details_result": details_result,
+    }
     try:
-        summary = {
-            "ma_tieu_chi": result.get("ma_tieu_chi"),
-            "fld_code": result.get("fld_code"),
-            "is_anomaly": result.get("is_anomaly"),
-            "anomaly_score": result.get("anomaly_score"),
-        }
-        print("AAAAAAAAAAA", summary)
-        emit_inference_result(
-            request_id=request_id,
-            model_name=str(result.get("model_name", "unknown")),
-            model_version=result.get("model_version"),
-            processing_time=float(total_time or 0.0),
-            status=str(result.get("status", "success")),
-            error_message=result.get("error_message"),
-            summary=summary,
-            threshold=result.get("anomaly_threshold"),
-        )
-    except Exception:
+        emit_inference_result(data)
+    except Exception as e:
         # Không để ảnh hưởng luồng chính
-        logger.debug("on_inference_done emit failed silently.", exc_info=False)
+        logger.error(f"on_inference_done emit failed silently. {e}")

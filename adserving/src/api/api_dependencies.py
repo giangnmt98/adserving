@@ -64,7 +64,7 @@ def initialize_dependencies(
     handler: DataHandler,
 ) -> None:
     """Initialize global dependencies"""
-    global monitor, data_handler
+    global data_handler
     data_handler = handler
 
     # Reset readiness về trạng thái khởi tạo

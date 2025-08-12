@@ -169,26 +169,28 @@ def finalize_validated_list_with_errors(
     """
 
     class ValidatedList(list):
-        pass
+        """Custom list class to store validation errors"""
+
+        def __init__(self, v):
+            self._validation_errors = None
 
     validated_data = ValidatedList(v)
     validated_data._validation_errors = validation_errors  # type: ignore[attr-defined]
 
-    # Đảm bảo mỗi item có bucket lỗi riêng
-    for item in validated_data:
-        if isinstance(item, dict) and "_validation_errors" not in item:
-            item["_validation_errors"] = []
-
-    # Nhóm lỗi theo ma_tieu_chi và đẩy vào item tương ứng
+    # Build error lookup dict
+    error_map: Dict[str, List[Dict[str, Any]]] = {}
     for error in validation_errors:
         mtc = error.get("ma_tieu_chi")
-        if not mtc:
-            # Thiếu mã tiêu chí -> không thể gán cụ thể
-            continue
-        for item in validated_data:
-            if isinstance(item, dict) and item.get("ma_tieu_chi") == mtc:
-                if "_validation_errors" not in item:
-                    item["_validation_errors"] = []
-                item["_validation_errors"].append(error)
+        if mtc:
+            if mtc not in error_map:
+                error_map[mtc] = []
+            error_map[mtc].append(error)
 
+    # Initialize error arrays and assign errors to items
+    for item in validated_data:
+        if isinstance(item, dict):
+            item["_validation_errors"] = []
+            if mtc := item.get("ma_tieu_chi"):
+                if mtc in error_map:
+                    item["_validation_errors"].extend(error_map[mtc])
     return validated_data

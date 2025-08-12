@@ -1,12 +1,13 @@
+"""Data processing and validation module for ad serving requests."""
+
 import re
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional
 
 from adserving.src.config.config import get_config
 from adserving.src.datahandler.models import (
     APIResponse,
     Metadata,
-    PredictionError,
     PredictionRequest,
     RequestInfo,
 )
@@ -19,6 +20,7 @@ class DataHandler:
     """Handles input processing, validation, and transformation"""
 
     def __init__(self):
+        """Initialize DataHandler with logger and configuration."""
         self.logger = get_logger()
         self.config = get_config()
 
@@ -55,6 +57,7 @@ class DataHandler:
     async def format_response(
         self,
         request_id: str,
+        timestamp,
         total_time: float,
         ma_don_vi,
         ma_bao_cao,
@@ -62,6 +65,7 @@ class DataHandler:
         detailed_results: Dict[str, Any],
         validation_errors: Optional[List] = None,
     ) -> APIResponse:
+        """Format API response with metadata and results."""
         try:
             status = detailed_results.get("status", "success")
             anomalies = detailed_results.get("anomalies", [])
@@ -77,7 +81,12 @@ class DataHandler:
             if not details and failed and status == "success":
                 status = "error"
 
-            metadata = self._create_metadata(request_id, status, total_time)
+            metadata = self._create_metadata(
+                request_id=request_id,
+                timestamp=timestamp,
+                status=status,
+                total_time=total_time,
+            )
             request_info = self._create_request_info(ma_don_vi, ma_bao_cao, ky_du_lieu)
             response_body = self._create_response_body(anomalies, failed, details)
 
@@ -94,6 +103,7 @@ class DataHandler:
             )
 
     def _infer_column_from_message(self, msg: str) -> str:
+        """Infer column name from error message by searching for FN patterns."""
         if not isinstance(msg, str):
             return "UNKNOWN"
         m = re.search(r"\bFN\d{1,2}\b", msg, flags=re.IGNORECASE)
@@ -102,6 +112,7 @@ class DataHandler:
     def _process_validation_error_item(
         self, err, is_dict: bool = True
     ) -> Dict[str, str]:
+        """Process individual validation error into standardized format."""
         if is_dict:
             e = err.to_dict() if hasattr(err, "to_dict") else err
             mtc = (e.get("ma_tieu_chi") or "").strip() or "UNKNOWN"
@@ -134,6 +145,7 @@ class DataHandler:
     def _process_validation_errors(
         self, validation_errors: List
     ) -> List[Dict[str, str]]:
+        """Process list of validation errors into standardized format."""
         failed = []
         for err in validation_errors:
             if hasattr(err, "to_dict") or isinstance(err, dict):
@@ -143,11 +155,12 @@ class DataHandler:
         return failed
 
     def _create_metadata(
-        self, request_id: str, status: str, total_time: float
+        self, request_id: str, timestamp: float, status: str, total_time: float
     ) -> Metadata:
+        """Create metadata object for API response."""
         return Metadata(
             status=status,
-            timestamp=datetime.now().isoformat(),
+            timestamp=timestamp,
             request_id=request_id,
             api_version=self.config.api_version,
             total_time=total_time,
@@ -156,6 +169,7 @@ class DataHandler:
     def _create_request_info(
         self, ma_don_vi: str, ma_bao_cao: str, ky_du_lieu: str
     ) -> RequestInfo:
+        """Create request info object with organizational and reporting details."""
         return RequestInfo(
             ma_don_vi=ma_don_vi, ma_bao_cao=ma_bao_cao, ky_du_lieu=ky_du_lieu
         )
@@ -163,6 +177,7 @@ class DataHandler:
     def _create_response_body(
         self, anomalies: List, failed: List, details: List
     ) -> Dict[str, List]:
+        """Create response body with anomalies, failed items, and details."""
         return {
             "anomalies": anomalies,  # [{ma_tieu_chi, list_anomaly}]
             "failed": failed,  # [{ma_tieu_chi, column, error_message}]
@@ -175,9 +190,10 @@ class DataHandler:
         total_time: float,
         detailed_results: Dict[str, Any],
     ) -> APIResponse:
+        """Create error response when detailed response formatting fails."""
         metadata = Metadata(
             status="error",
-            timestamp=datetime.now().isoformat(),
+            timestamp=time.time() * 1000,
             request_id=request_id,
             api_version=self.config.api_version,
             total_time=total_time,
@@ -193,160 +209,4 @@ class DataHandler:
             metadata=metadata,
             request_info=request_info,
             results={"anomalies": [], "failed_elements": [], "details": []},
-        )
-
-    def _create_metadata_and_request_info(
-        self, first_result: Dict[str, Any], request_id: str, total_time: float
-    ) -> Tuple[Metadata, RequestInfo]:
-        """Create metadata and request info from first result"""
-        ma_don_vi = first_result.get("ma_don_vi", "")
-        ma_bao_cao = first_result.get("ma_bao_cao", "")
-        ky_du_lieu = first_result.get("ky_du_lieu", "")
-
-        metadata = Metadata(
-            status="success",
-            timestamp=datetime.now().isoformat(),
-            request_id=request_id,
-            api_version=self.config.api_version,
-            total_time=total_time,
-        )
-
-        request_info = RequestInfo(
-            ma_don_vi=ma_don_vi, ma_bao_cao=ma_bao_cao, ky_du_lieu=ky_du_lieu
-        )
-
-        return metadata, request_info
-
-    def _process_results(
-        self, results_list: List[Dict[str, Any]], request_info: RequestInfo
-    ) -> Tuple[Dict[str, List[str]], List[PredictionError]]:
-        """Process results list with partial success support"""
-        criteria_groups: Dict[str, List[str]] = {}
-        prediction_errors: List[PredictionError] = []
-
-        for task_result in results_list:
-            if task_result.get("status") != "success":
-                error = self._handle_failed_result(task_result)
-                if error:
-                    prediction_errors.append(error)
-                continue
-            # Process successful results
-            ma_tieu_chi = task_result.get("ma_tieu_chi")
-            fld_code = task_result.get("fld_code")
-            is_anomaly = task_result.get("is_anomaly")
-
-            # Skip if ma_tieu_chi is empty or None (this should be caught in validation)
-            if not ma_tieu_chi or not ma_tieu_chi.strip():
-                self.logger.warning(
-                    f"Skipping result with empty ma_tieu_chi: {task_result}"
-                )
-                prediction_errors.append(
-                    PredictionError.from_validation_error(
-                        {
-                            "error_message": "ma_tieu_chi "
-                            "field is required and cannot be empty",
-                            "ma_tieu_chi": ma_tieu_chi,
-                        }
-                    )
-                )
-                continue
-
-            # Skip if fld_code is missing (field validation error)
-            if not fld_code:
-                self.logger.warning(
-                    f"Skipping result with missing fld_code for {ma_tieu_chi}"
-                )
-                prediction_errors.append(
-                    PredictionError.from_validation_error(
-                        {
-                            "error_message": f"Field code "
-                            f"is missing for ma_tieu_chi:"
-                            f" {ma_tieu_chi}",
-                            "ma_tieu_chi": ma_tieu_chi,
-                        }
-                    )
-                )
-                continue
-
-            # Process valid field
-            if ma_tieu_chi not in criteria_groups:
-                criteria_groups[ma_tieu_chi] = []
-
-            if is_anomaly:
-                criteria_groups[ma_tieu_chi].append(fld_code)
-                self.logger.debug(f"Added anomaly field {fld_code} to {ma_tieu_chi}")
-
-        return criteria_groups, prediction_errors
-
-    def _handle_failed_result(self, task_result: Dict[str, Any]) -> PredictionError:
-        """Handle failed task result and create PredictionError"""
-        ma_tieu_chi = task_result.get("ma_tieu_chi", "UNKNOWN")
-        fn_field = task_result.get("fn_field")
-        error_message = task_result.get("error", "Unknown error occurred")
-
-        # Determine error type and create appropriate PredictionError
-        if "model_not_found" in error_message.lower():
-            return PredictionError.from_model_error(
-                ma_tieu_chi=ma_tieu_chi,
-                error_message="Model not found",
-            )
-        elif "timeout" in error_message.lower():
-            return PredictionError.from_prediction_failure(
-                ma_tieu_chi=ma_tieu_chi,
-                fn_field=fn_field,
-                error_message="Prediction timeout",
-            )
-        elif "invalid_input" in error_message.lower():
-            return PredictionError.from_prediction_failure(
-                ma_tieu_chi=ma_tieu_chi,
-                fn_field=fn_field,
-                error_message="Invalid input data",
-            )
-        else:
-            return PredictionError.from_prediction_failure(
-                ma_tieu_chi=ma_tieu_chi,
-                fn_field=fn_field,
-                error_message="Prediction failed",
-            )
-
-    def _create_error_response_with_validation(
-        self,
-        request_id: str,
-        total_time: float,
-        result: Dict[str, Any],
-        validation_errors: List[PredictionError],
-    ) -> APIResponse:
-        """Create an error response with validation errors included"""
-
-        # Extract request info from result if available
-        ma_don_vi = result.get("ma_don_vi", "UNKNOWN")
-        ma_bao_cao = result.get("ma_bao_cao", "UNKNOWN")
-        ky_du_lieu = result.get("ky_du_lieu", "UNKNOWN")
-
-        # Create basic error from result
-        result_errors = []
-        if result.get("error"):
-            result_errors.append(
-                PredictionError.from_model_error(
-                    ma_tieu_chi="SYSTEM",
-                    error_message="System error",
-                )
-            )
-
-        metadata = Metadata(
-            status="error",
-            timestamp=datetime.now().isoformat(),
-            request_id=request_id,
-            api_version=self.config.api_version,
-            total_time=total_time,
-        )
-
-        request_info = RequestInfo(
-            ma_don_vi=ma_don_vi, ma_bao_cao=ma_bao_cao, ky_du_lieu=ky_du_lieu
-        )
-
-        return APIResponse(
-            metadata=metadata,
-            request_info=request_info,
-            results={"anomalies": [], "failed_elements": result_errors},
         )

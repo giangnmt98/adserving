@@ -1,6 +1,7 @@
 # Python
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+
 from adserving.src.config.config import get_config
 from adserving.src.utils.logger import get_logger
 
@@ -8,19 +9,24 @@ logger = get_logger()
 
 
 def make_pg_engine() -> Engine:
+    """Creates and returns a SQLAlchemy PostgreSQL engine with connection pool.
+
+    Returns:
+        Engine: SQLAlchemy Engine instance configured for PostgreSQL.
+    """
+
     cfg = get_config()
-    raw = getattr(cfg, "raw", {}) if hasattr(cfg, "raw") else {}
-    db = raw.get("database", {}) or {}
-    user = db.get("user")
-    pwd = db.get("password")
-    host = db.get("host", "127.0.0.1")
-    port = int(db.get("port", 5432))
-    name = db.get("name")
+    database_cfg = cfg.database
+    database_name = database_cfg.database_name
+    user = database_cfg.username
+    pwd = database_cfg.password
+    host = database_cfg.host
+    port = int(database_cfg.port)
 
     # Cần driver psycopg2, nếu thiếu sẽ ném lỗi khi sử dụng.
-    url = f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{name}"
-    min_con = int(db.get("min_connections", 5))
-    max_con = int(db.get("max_connections", 20))
+    url = f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{database_name}"
+    min_con = int(database_cfg.min_connections)
+    max_con = int(database_cfg.max_connections)
     engine = create_engine(
         url,
         pool_size=min_con,

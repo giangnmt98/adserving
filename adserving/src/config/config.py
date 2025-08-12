@@ -18,9 +18,6 @@ from .config_manager import (
     set_config,
 )
 
-# REMOVED: Direct import that causes circular dependency
-
-
 # Module docstring for documentation
 __doc__ = """
 Configuration for Anomaly Detection Serve

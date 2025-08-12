@@ -1,4 +1,3 @@
-
 import json
 import os
 import random
@@ -12,14 +11,13 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import IsolationForest
+from pyod.models.deepsvdd import DeepSVDD
 from sklearn.preprocessing import StandardScaler
-
 
 """
 Script: anomaly_clone_float_models.py
 
-- Trains IsolationForest on 1D feature 'gia_tri'.
+- Trains DeepSVDD on 1D feature 'gia_tri'.
 - Inference wrapper accepts ONLY a single float.
 - Auto-computes anomaly_threshold via training-score quantile by
   contamination and logs all stats to MLflow params.
@@ -33,7 +31,6 @@ Prereqs:
     ky_du_lieu, gia_tri
 """
 
-
 # MLflow setup
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"))
 mlflow.set_experiment("Anomaly_Detection_Models")
@@ -42,7 +39,9 @@ mlflow.set_experiment("Anomaly_Detection_Models")
 @dataclass
 class TrainConfig:
     contamination: float = 0.1
-    n_estimators: int = 100
+    epochs: int = 50
+    batch_size: int = 128
+    lr: float = 1e-3
     random_state: int = 42
 
 
@@ -67,7 +66,7 @@ class AnomalyDetectionWrapperFloat:
 
     def __init__(
         self,
-        model: IsolationForest,
+        model: DeepSVDD,
         scaler: StandardScaler,
         anomaly_threshold: float,
     ):
@@ -91,7 +90,7 @@ class AnomalyDetectionWrapperFloat:
 
 class SimpleAnomalyDetectionModel:
     """
-    Train IsolationForest on univariate 'gia_tri' only.
+    Train DeepSVDD on univariate 'gia_tri' only.
     Supports cloning by registering new names for the same trained spec.
     """
 
@@ -106,12 +105,14 @@ class SimpleAnomalyDetectionModel:
 
     def train_model(
         self, data: pd.DataFrame
-    ) -> Tuple[IsolationForest, StandardScaler, float, Dict[str, float]]:
+    ) -> Tuple[DeepSVDD, StandardScaler, float, Dict[str, float]]:
         x_scaled, scaler = self._prepare(data)
-        model = IsolationForest(
+        model = DeepSVDD(
             contamination=self.cfg.contamination,
+            epochs=self.cfg.epochs,
+            batch_size=self.cfg.batch_size,
             random_state=self.cfg.random_state,
-            n_estimators=self.cfg.n_estimators,
+            n_features=features.shape[1],
         )
         model.fit(x_scaled)
 
@@ -130,7 +131,7 @@ class SimpleAnomalyDetectionModel:
 
     def save_to_mlflow(
         self,
-        model: IsolationForest,
+        model: DeepSVDD,
         scaler: StandardScaler,
         anomaly_threshold: float,
         model_name: str,
@@ -141,13 +142,15 @@ class SimpleAnomalyDetectionModel:
         wrapped = AnomalyDetectionWrapperFloat(
             model=model, scaler=scaler, anomaly_threshold=anomaly_threshold
         )
-        with mlflow.start_run(run_name=f"register_{model_name}"):
+        with mlflow.start_run(run_name=f"register_{model_name}") as run:
             mlflow.log_param("model_name", model_name)
             mlflow.log_param("training_samples", int(num_samples))
             mlflow.log_param("input_type", "float")
-            mlflow.log_param("algorithm", "isolation_forest")
+            mlflow.log_param("algorithm", "deepsvdd")
             mlflow.log_param("contamination", self.cfg.contamination)
-            mlflow.log_param("n_estimators", self.cfg.n_estimators)
+            mlflow.log_param("epochs", self.cfg.epochs)
+            mlflow.log_param("batch_size", self.cfg.batch_size)
+            mlflow.log_param("lr", self.cfg.lr)
             mlflow.log_param("random_state", self.cfg.random_state)
             mlflow.log_param("threshold_method", "quantile_by_contamination")
             mlflow.log_param("anomaly_threshold", anomaly_threshold)
@@ -163,7 +166,7 @@ class SimpleAnomalyDetectionModel:
                 artifact_path="model",
                 registered_model_name=model_name,
             )
-            run_id = mlflow.active_run().info.run_id
+            run_id = run.info.run_id
 
         time.sleep(0.5)
         client = mlflow.tracking.MlflowClient()
@@ -198,8 +201,7 @@ def train_clone_task(
     date_range = f"{sub_data['ky_du_lieu'].min()} to {sub_data['ky_du_lieu'].max()}"
     new_chi_tieu = f"{row['ma_tieu_chi']}_R{_suffix(6)}"
     model_name = (
-        f"{row['ma_don_vi']}_{row['ma_bao_cao']}"
-        f"_{new_chi_tieu}_{row['fld_code']}"
+        f"{row['ma_don_vi']}_{row['ma_bao_cao']}" f"_{new_chi_tieu}_{row['fld_code']}"
     )
     return detector.save_to_mlflow(
         model=model,
@@ -246,9 +248,7 @@ def main() -> None:
     failures = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [
-            pool.submit(train_clone_task, *task) for task in tasks
-        ]
+        futures = [pool.submit(train_clone_task, *task) for task in tasks]
         for fut in as_completed(futures):
             try:
                 results.append(fut.result())
@@ -256,16 +256,10 @@ def main() -> None:
                 failures += 1
                 print(f"Task failed: {exc}")
 
-
     list_model = os.listdir("./mlruns/models")
-    df = pd.DataFrame(list_model, columns = ['model_name'])
-    df.to_csv('list_model.csv', index=False)
-    # out_path = os.getenv("OUTPUT_JSON", "generated_model_names.json")
-    # with open(out_path, "w", encoding="utf-8") as f:
-    #     json.dump(results, f, indent=2, ensure_ascii=False)
-    #
-    # print(f"Saved {len(results)} models. Failures: {failures}.")
-    # print(f"Output: {out_path}")
+    df = pd.DataFrame(list_model, columns=["model_name"])
+    df.to_csv("list_model.csv", index=False)
+    print(f"Saved {len(results)} models. Failures: {failures}.")
 
 
 if __name__ == "__main__":
