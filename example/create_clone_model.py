@@ -11,7 +11,7 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
-from pyod.models.deepsvdd import DeepSVDD
+from pyod.models.deep_svdd import DeepSVDD
 from sklearn.preprocessing import StandardScaler
 
 """
@@ -112,7 +112,7 @@ class SimpleAnomalyDetectionModel:
             epochs=self.cfg.epochs,
             batch_size=self.cfg.batch_size,
             random_state=self.cfg.random_state,
-            n_features=features.shape[1],
+            n_features=x_scaled.shape[1],
         )
         model.fit(x_scaled)
 
@@ -216,7 +216,7 @@ def train_clone_task(
 
 def main() -> None:
     data_path = os.getenv("DATA_PATH", "bao_cao_dulieu_not_none.csv")
-    clones_per_combo = int(os.getenv("CLONES_PER_COMBO", "55"))
+    clones_per_combo = int(os.getenv("CLONES_PER_COMBO", "2"))
     max_workers = int(os.getenv("MAX_WORKERS", "16"))
 
     if not os.path.exists(data_path):
@@ -255,11 +255,6 @@ def main() -> None:
             except Exception as exc:
                 failures += 1
                 print(f"Task failed: {exc}")
-
-    list_model = os.listdir("./mlruns/models")
-    df = pd.DataFrame(list_model, columns=["model_name"])
-    df.to_csv("list_model.csv", index=False)
-    print(f"Saved {len(results)} models. Failures: {failures}.")
 
 
 if __name__ == "__main__":
